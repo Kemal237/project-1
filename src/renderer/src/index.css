@@ -53,6 +53,9 @@ input, textarea, select {
   .badge-green  { @apply badge bg-accent-green/20 text-green-400; }
   .badge-blue   { @apply badge bg-accent-blue/20 text-blue-400; }
   .badge-red    { @apply badge bg-accent-red/20 text-red-400; }
+  .badge-orange {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-500/15 text-orange-400;
+  }
   .badge-yellow { @apply badge bg-accent-yellow/20 text-yellow-400; }
   .badge-gray   { @apply badge bg-bg-hover text-text-secondary; }
 

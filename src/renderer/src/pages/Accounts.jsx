@@ -1,23 +1,31 @@
-import { useEffect, useState } from 'react'
-import { Plus, Upload, Trash2, RefreshCw, Shield, ShieldOff, Search } from 'lucide-react'
+import { useEffect, useState, useCallback } from 'react'
+import { Plus, Upload, Trash2, RefreshCw, Shield, ShieldOff, Search, Play, Square } from 'lucide-react'
 
 const STATUS_BADGE = {
-  farming: 'badge-green',
-  online:  'badge-blue',
-  idle:    'badge-gray',
-  banned:  'badge-red',
-  error:   'badge-red',
-  warmup:  'badge-yellow',
+  online:       'badge-green',
+  farming:      'badge-green',
+  connecting:   'badge-yellow',
+  reconnecting: 'badge-yellow',
+  idle:         'badge-gray',
+  no_prime:     'badge-orange',
+  banned:       'badge-red',
+  error:        'badge-red',
+  warmup:       'badge-yellow',
 }
 
 const STATUS_LABEL = {
-  farming: 'Фармит',
-  online:  'Онлайн',
-  idle:    'Ожидает',
-  banned:  'Забанен',
-  error:   'Ошибка',
-  warmup:  'Прогрев',
+  online:       'Онлайн',
+  farming:      'Фармит',
+  connecting:   'Подключение...',
+  reconnecting: 'Реконнект...',
+  idle:         'Офлайн',
+  no_prime:     'Нет Prime',
+  banned:       'Забанен',
+  error:        'Ошибка',
+  warmup:       'Прогрев',
 }
+
+const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming'])
 
 function AddAccountModal({ proxies, onSave, onClose }) {
   const [form, setForm] = useState({ login: '', password: '', sharedSecret: '', identitySecret: '', proxyId: '', isPrime: true, notes: '' })
@@ -117,19 +125,50 @@ function ImportModal({ onSave, onClose }) {
 }
 
 export default function Accounts() {
-  const [accounts, setAccounts] = useState([])
-  const [proxies, setProxies]   = useState([])
-  const [search, setSearch]     = useState('')
-  const [modal, setModal]       = useState(null)
-  const [selected, setSelected] = useState(new Set())
+  const [accounts, setAccounts]             = useState([])
+  const [proxies, setProxies]               = useState([])
+  const [search, setSearch]                 = useState('')
+  const [modal, setModal]                   = useState(null)
+  const [selected, setSelected]             = useState(new Set())
+  const [workerStatuses, setWorkerStatuses] = useState({})
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const [a, p] = await Promise.all([window.api.accounts.getAll(), window.api.proxies.getAll()])
     setAccounts(a)
     setProxies(p)
+  }, [])
+
+  useEffect(() => {
+    load()
+
+    window.api.farm.statuses().then(s => setWorkerStatuses(s || {}))
+
+    window.api.farm.onStatus(({ accountId, status, message }) => {
+      setWorkerStatuses(prev => ({ ...prev, [accountId]: { status, message } }))
+    })
+    window.api.farm.onError(({ accountId, message }) => {
+      setWorkerStatuses(prev => ({ ...prev, [accountId]: { status: 'error', message } }))
+    })
+
+    return () => window.api.farm.offAll()
+  }, [load])
+
+  const getStatus = (account) => {
+    const ws = workerStatuses[account.id]
+    return ws ? ws.status : account.status
   }
 
-  useEffect(() => { load() }, [])
+  const isActive = (account) => ACTIVE_STATUSES.has(getStatus(account))
+
+  const handleStart = async (id) => { await window.api.farm.start(id) }
+  const handleStop  = async (id) => { await window.api.farm.stop(id) }
+
+  const handleStartAll = async () => {
+    const eligible = accounts.filter(a => a.isPrime && a.proxy && !isActive(a))
+    for (const a of eligible) await window.api.farm.start(a.id)
+  }
+
+  const handleStopAll = async () => { await window.api.farm.stopAll() }
 
   const filtered = accounts.filter(a =>
     a.login.toLowerCase().includes(search.toLowerCase())
@@ -147,12 +186,17 @@ export default function Accounts() {
     load()
   }
 
+  const activeCount = accounts.filter(a => isActive(a)).length
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-text-primary">Аккаунты</h1>
-          <p className="text-text-secondary text-sm mt-0.5">{accounts.length} аккаунтов</p>
+          <p className="text-text-secondary text-sm mt-0.5">
+            {accounts.length} аккаунтов
+            {activeCount > 0 && <span className="text-green-400 ml-2">· {activeCount} активных</span>}
+          </p>
         </div>
         <div className="flex gap-2">
           {selected.size > 0 && (
@@ -160,6 +204,12 @@ export default function Accounts() {
               <Trash2 size={14} /> Удалить ({selected.size})
             </button>
           )}
+          <button className="btn-ghost" onClick={handleStopAll}>
+            <Square size={14} /> Стоп все
+          </button>
+          <button className="btn-primary" onClick={handleStartAll}>
+            <Play size={14} /> Старт все
+          </button>
           <button className="btn-ghost" onClick={() => setModal('import')}>
             <Upload size={14} /> Импорт
           </button>
@@ -201,52 +251,68 @@ export default function Accounts() {
               <th className="px-4 py-3 text-right">Дропов / неделя</th>
               <th className="px-4 py-3 text-right">Всего дропов</th>
               <th className="px-4 py-3 text-right">Последний дроп</th>
-              <th className="px-4 py-3 text-right w-12"></th>
+              <th className="px-4 py-3 text-right w-24"></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map(a => (
-              <tr key={a.id} className="border-b border-border/50 hover:bg-bg-hover/50 transition-colors">
-                <td className="px-4 py-3">
-                  <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} />
-                </td>
-                <td className="px-4 py-3 font-mono text-text-primary">{a.login}</td>
-                <td className="px-4 py-3">
-                  <span className={STATUS_BADGE[a.status] || 'badge-gray'}>
-                    {STATUS_LABEL[a.status] || a.status}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  {a.isPrime
-                    ? <Shield size={14} className="text-yellow-400" />
-                    : <ShieldOff size={14} className="text-text-muted" />}
-                </td>
-                <td className="px-4 py-3 text-text-secondary font-mono text-xs">
-                  {a.proxy ? `${a.proxy.host}:${a.proxy.port}` : <span className="text-text-muted">—</span>}
-                </td>
-                <td className="px-4 py-3 text-right text-text-secondary">
-                  <div className="flex items-center justify-end gap-2">
-                    <div className="w-16 h-1.5 bg-bg-hover rounded-full overflow-hidden">
-                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min((a.xpProgress / 5000) * 100, 100)}%` }} />
+            {filtered.map(a => {
+              const status  = getStatus(a)
+              const active  = ACTIVE_STATUSES.has(status)
+              const noPrime = status === 'no_prime' || !a.isPrime
+              return (
+                <tr key={a.id} className="border-b border-border/50 hover:bg-bg-hover/50 transition-colors">
+                  <td className="px-4 py-3">
+                    <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} />
+                  </td>
+                  <td className="px-4 py-3 font-mono text-text-primary">{a.login}</td>
+                  <td className="px-4 py-3">
+                    <span className={STATUS_BADGE[status] || 'badge-gray'}>
+                      {STATUS_LABEL[status] || status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {a.isPrime
+                      ? <Shield size={14} className="text-yellow-400" />
+                      : <ShieldOff size={14} className="text-text-muted" />}
+                  </td>
+                  <td className="px-4 py-3 text-text-secondary font-mono text-xs">
+                    {a.proxy ? `${a.proxy.host}:${a.proxy.port}` : <span className="text-text-muted">—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-right text-text-secondary">
+                    <div className="flex items-center justify-end gap-2">
+                      <div className="w-16 h-1.5 bg-bg-hover rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min((a.xpProgress / 5000) * 100, 100)}%` }} />
+                      </div>
+                      <span className="text-xs text-text-muted w-12 text-right">{a.xpProgress}/5000</span>
                     </div>
-                    <span className="text-xs text-text-muted w-12 text-right">{a.xpProgress}/5000</span>
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-right font-medium text-green-400">{a.dropsThisWeek}</td>
-                <td className="px-4 py-3 text-right text-text-secondary">{a.dropsTotal}</td>
-                <td className="px-4 py-3 text-right text-text-muted text-xs">
-                  {a.lastDropAt ? new Date(a.lastDropAt).toLocaleDateString('ru') : '—'}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    className="btn-ghost p-1.5"
-                    onClick={async () => { await window.api.accounts.delete(a.id); load() }}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="px-4 py-3 text-right font-medium text-green-400">{a.dropsThisWeek}</td>
+                  <td className="px-4 py-3 text-right text-text-secondary">{a.dropsTotal}</td>
+                  <td className="px-4 py-3 text-right text-text-muted text-xs">
+                    {a.lastDropAt ? new Date(a.lastDropAt).toLocaleDateString('ru') : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      {!noPrime && (
+                        active
+                          ? <button className="btn-ghost p-1.5" title="Остановить" onClick={() => handleStop(a.id)}>
+                              <Square size={13} className="text-red-400" />
+                            </button>
+                          : <button className="btn-ghost p-1.5" title="Запустить" onClick={() => handleStart(a.id)}>
+                              <Play size={13} className="text-green-400" />
+                            </button>
+                      )}
+                      <button
+                        className="btn-ghost p-1.5"
+                        onClick={async () => { await window.api.accounts.delete(a.id); load() }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={10} className="px-4 py-12 text-center text-text-muted">
