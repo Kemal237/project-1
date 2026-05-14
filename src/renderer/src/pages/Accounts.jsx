@@ -165,7 +165,7 @@ export default function Accounts() {
 
   const handleStartAll = async () => {
     const eligible = accounts.filter(a => a.isPrime && a.proxy && !isActive(a))
-    for (const a of eligible) await window.api.farm.start(a.id)
+    await Promise.all(eligible.map(a => window.api.farm.start(a.id)))
   }
 
   const handleStopAll = async () => { await window.api.farm.stopAll() }
@@ -181,7 +181,7 @@ export default function Accounts() {
   })
 
   const deleteSelected = async () => {
-    for (const id of selected) await window.api.accounts.delete(id)
+    await Promise.all([...selected].map(id => window.api.accounts.delete(id)))
     setSelected(new Set())
     load()
   }
@@ -240,7 +240,7 @@ export default function Accounts() {
                 <input
                   type="checkbox"
                   onChange={e => setSelected(e.target.checked ? new Set(filtered.map(a => a.id)) : new Set())}
-                  checked={selected.size === filtered.length && filtered.length > 0}
+                  checked={filtered.length > 0 && filtered.every(a => selected.has(a.id))}
                 />
               </th>
               <th className="px-4 py-3 text-left">Логин</th>
@@ -258,7 +258,7 @@ export default function Accounts() {
             {filtered.map(a => {
               const status  = getStatus(a)
               const active  = ACTIVE_STATUSES.has(status)
-              const noPrime = status === 'no_prime' || !a.isPrime
+              const noPrime = status === 'no_prime'
               return (
                 <tr key={a.id} className="border-b border-border/50 hover:bg-bg-hover/50 transition-colors">
                   <td className="px-4 py-3">
