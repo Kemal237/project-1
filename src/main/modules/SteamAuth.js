@@ -49,16 +49,19 @@ function waitLoggedOn(client, ms = 30_000) {
   })
 }
 
-export async function login(creds, proxyUrl) {
+export async function login(creds, proxyUrl, { onSteamGuard, onLicenses } = {}) {
   if (!proxyUrl) {
     throw Object.assign(new Error('Прокси обязателен'), { code: 'ERR_NO_PROXY' })
   }
 
   if (creds.refreshToken) {
     const client = makeClient(proxyUrl)
+    // Регистрируем licenses ДО logOn — иначе событие придёт раньше чем _setupClientEvents
+    // Передаём client явно чтобы избежать TDZ в замыкании вызывающего кода
+    if (onLicenses) client.once('licenses', (licenses) => onLicenses(licenses, client))
     try {
       const p = waitLoggedOn(client)
-      client.login({ refreshToken: creds.refreshToken })
+      client.logOn({ refreshToken: creds.refreshToken })
       await p
       return { client, refreshToken: creds.refreshToken }
     } catch (err) {
@@ -73,13 +76,23 @@ export async function login(creds, proxyUrl) {
   let newToken = null
   client.once('refreshToken', t => { newToken = t })
 
+  // Регистрируем licenses ДО logOn — race condition fix
+  if (onLicenses) client.once('licenses', (licenses) => onLicenses(licenses, client))
+
+  if (onSteamGuard) {
+    client.on('steamGuard', (domain, callback, lastCodeWrong) => {
+      onSteamGuard(domain, callback, lastCodeWrong)
+    })
+  }
+
   try {
     const twoFactorCode = creds.sharedSecret
       ? SteamTotp.generateAuthCode(creds.sharedSecret)
       : undefined
 
-    const p = waitLoggedOn(client)
-    client.login({ accountName: creds.login, password: creds.password, twoFactorCode })
+    // Если есть обработчик Steam Guard — ждём до 10 минут (пользователь вводит код вручную)
+    const p = waitLoggedOn(client, onSteamGuard ? 600_000 : 30_000)
+    client.logOn({ accountName: creds.login, password: creds.password, twoFactorCode })
     await p
   } catch (err) {
     client.logOff()

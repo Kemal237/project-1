@@ -31,6 +31,16 @@ export function setupIPC() {
     accountManager.update(id, { status: 'idle' })
     workerManager.webContents?.send('worker:statusChange', { accountId: id, status: 'idle' })
   })
-  ipcMain.handle('farm:stopAll',  ()      => workerManager.stopAll())
+  ipcMain.handle('farm:stopAll', async () => {
+    const ids = [...workerManager.workers.keys()]
+    await workerManager.stopAll()
+    for (const id of ids) {
+      accountManager.update(id, { status: 'idle' })
+      workerManager.webContents?.send('worker:statusChange', { accountId: id, status: 'idle' })
+    }
+  })
   ipcMain.handle('farm:statuses', ()      => workerManager.getAllStatuses())
+  ipcMain.handle('farm:steamGuardCode', (_, accountId, code) =>
+    workerManager.provideCode(accountId, code)
+  )
 }

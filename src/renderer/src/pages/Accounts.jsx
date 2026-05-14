@@ -1,34 +1,117 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Upload, Trash2, RefreshCw, Shield, ShieldOff, Search, Play, Square } from 'lucide-react'
+import { Plus, Upload, Trash2, RefreshCw, Shield, ShieldOff, Search, Play, Square, AlertTriangle } from 'lucide-react'
 
 const STATUS_BADGE = {
-  online:       'badge-green',
-  farming:      'badge-green',
-  connecting:   'badge-yellow',
-  reconnecting: 'badge-yellow',
-  idle:         'badge-gray',
-  no_prime:     'badge-orange',
-  banned:       'badge-red',
-  error:        'badge-red',
-  warmup:       'badge-yellow',
+  online:         'badge-green',
+  farming:        'badge-green',
+  connecting:     'badge-yellow',
+  reconnecting:   'badge-yellow',
+  idle:           'badge-gray',
+  no_prime:       'badge-orange',
+  banned:         'badge-red',
+  error:          'badge-red',
+  warmup:         'badge-yellow',
+  awaiting_guard: 'badge-yellow',
 }
 
 const STATUS_LABEL = {
-  online:       'Онлайн',
-  farming:      'Фармит',
-  connecting:   'Подключение...',
-  reconnecting: 'Реконнект...',
-  idle:         'Офлайн',
-  no_prime:     'Нет Prime',
-  banned:       'Забанен',
-  error:        'Ошибка',
-  warmup:       'Прогрев',
+  online:         'Онлайн',
+  farming:        'Фармит',
+  connecting:     'Подключение...',
+  reconnecting:   'Реконнект...',
+  idle:           'Офлайн',
+  no_prime:       'Нет Prime',
+  banned:         'Забанен',
+  error:          'Ошибка',
+  warmup:         'Прогрев',
+  awaiting_guard: 'Введи код',
 }
 
-const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming'])
+const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard'])
+
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.frequency.value = 880
+    gain.gain.setValueAtTime(0.3, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.3)
+  } catch {}
+}
+
+function SteamGuardModal({ request, onSubmit, onClose }) {
+  const [code, setCode] = useState('')
+  const [timeLeft, setTimeLeft] = useState(120)
+
+  useEffect(() => {
+    setTimeLeft(120)
+    setCode('')
+  }, [request?.accountId])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTimeLeft(t => (t <= 1 ? 120 : t - 1))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const submit = () => {
+    if (!code.trim()) return
+    onSubmit(request.accountId, code.trim())
+    setCode('')
+  }
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter') submit()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+      <div className="bg-bg-card border border-border rounded-xl w-[400px] p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-text-primary">Steam Guard</h2>
+          <span className="text-sm text-text-muted">{timeLeft}с</span>
+        </div>
+        <div className="text-sm text-text-secondary">
+          <span className="font-mono text-text-primary">{request.login}</span>
+          <p className="mt-1 text-text-muted">
+            {request.domain
+              ? `Введи код из письма на ${request.domain}`
+              : 'Открой Steam на телефоне и введи код аутентификатора'}
+          </p>
+        </div>
+        {request.lastCodeWrong && (
+          <p className="text-xs text-red-400 bg-red-400/10 rounded px-3 py-2">
+            Неверный код — попробуй снова
+          </p>
+        )}
+        <input
+          className="input text-center font-mono tracking-widest text-lg"
+          placeholder="XXXXX"
+          value={code}
+          onChange={e => setCode(e.target.value.toUpperCase())}
+          onKeyDown={handleKey}
+          maxLength={7}
+          autoFocus
+        />
+        <div className="flex gap-2 justify-end">
+          <button className="btn-ghost" onClick={onClose}>Скрыть</button>
+          <button className="btn-primary" onClick={submit} disabled={!code.trim()}>
+            Подтвердить
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function AddAccountModal({ proxies, onSave, onClose }) {
-  const [form, setForm] = useState({ login: '', password: '', sharedSecret: '', identitySecret: '', proxyId: '', isPrime: true, notes: '' })
+  const [form, setForm] = useState({ login: '', password: '', sharedSecret: '', identitySecret: '', proxyId: '', notes: '' })
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -70,10 +153,6 @@ function AddAccountModal({ proxies, onSave, onClose }) {
               ))}
             </select>
           </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={form.isPrime} onChange={e => set('isPrime', e.target.checked)} className="rounded" />
-            <span className="text-sm text-text-secondary">Prime статус</span>
-          </label>
           <div>
             <label className="label">Заметки</label>
             <input className="input" value={form.notes} onChange={e => set('notes', e.target.value)} placeholder="Необязательно" />
@@ -131,11 +210,17 @@ export default function Accounts() {
   const [modal, setModal]                   = useState(null)
   const [selected, setSelected]             = useState(new Set())
   const [workerStatuses, setWorkerStatuses] = useState({})
+  const [steamGuardRequest, setSteamGuardRequest] = useState(null)
+  const [isRefreshing, setIsRefreshing]   = useState(false)
+  const [isStartingAll, setIsStartingAll] = useState(false)
+  const [isStoppingAll, setIsStoppingAll] = useState(false)
 
   const load = useCallback(async () => {
+    setIsRefreshing(true)
     const [a, p] = await Promise.all([window.api.accounts.getAll(), window.api.proxies.getAll()])
     setAccounts(a)
     setProxies(p)
+    setTimeout(() => setIsRefreshing(false), 600)
   }, [])
 
   useEffect(() => {
@@ -145,9 +230,18 @@ export default function Accounts() {
 
     window.api.farm.onStatus(({ accountId, status, message }) => {
       setWorkerStatuses(prev => ({ ...prev, [accountId]: { status, message } }))
+      // Перезагружаем аккаунты чтобы подхватить обновлённый isPrime из БД
+      if (status === 'online' || status === 'no_prime') load()
     })
     window.api.farm.onError(({ accountId, message }) => {
       setWorkerStatuses(prev => ({ ...prev, [accountId]: { status: 'error', message } }))
+    })
+    window.api.farm.onSteamGuard(({ accountId, domain, lastCodeWrong }) => {
+      setSteamGuardRequest({ accountId, domain, lastCodeWrong })
+      playBeep()
+      const prevTitle = document.title
+      document.title = '🔔 Введи Steam Guard код!'
+      setTimeout(() => { document.title = prevTitle }, 5000)
     })
 
     return () => window.api.farm.offAll()
@@ -164,11 +258,24 @@ export default function Accounts() {
   const handleStop  = async (id) => { await window.api.farm.stop(id) }
 
   const handleStartAll = async () => {
+    setIsStartingAll(true)
     const eligible = accounts.filter(a => a.isPrime && a.proxy && !isActive(a))
     await Promise.all(eligible.map(a => window.api.farm.start(a.id)))
+    setIsStartingAll(false)
   }
 
-  const handleStopAll = async () => { await window.api.farm.stopAll() }
+  const handleStopAll = async () => {
+    setIsStoppingAll(true)
+    await window.api.farm.stopAll()
+    setIsStoppingAll(false)
+  }
+
+  const handleSteamGuardSubmit = async (accountId, code) => {
+    await window.api.farm.submitCode(accountId, code)
+    setSteamGuardRequest(null)
+  }
+
+  const handleSteamGuardClose = () => setSteamGuardRequest(null)
 
   const filtered = accounts.filter(a =>
     a.login.toLowerCase().includes(search.toLowerCase())
@@ -179,6 +286,18 @@ export default function Accounts() {
     n.has(id) ? n.delete(id) : n.add(id)
     return n
   })
+
+  const startSelected = async () => {
+    const ids = [...selected].filter(id => {
+      const a = accounts.find(x => x.id === id)
+      return a && a.proxy && !isActive(a)
+    })
+    await Promise.all(ids.map(id => window.api.farm.start(id)))
+  }
+
+  const stopSelected = async () => {
+    await Promise.all([...selected].map(id => window.api.farm.stop(id)))
+  }
 
   const deleteSelected = async () => {
     await Promise.all([...selected].map(id => window.api.accounts.delete(id)))
@@ -200,23 +319,45 @@ export default function Accounts() {
         </div>
         <div className="flex gap-2">
           {selected.size > 0 && (
-            <button className="btn-danger" onClick={deleteSelected}>
-              <Trash2 size={14} /> Удалить ({selected.size})
-            </button>
+            <>
+              <button className="btn-ghost transition-all active:scale-95" onClick={startSelected}>
+                <Play size={14} className="text-green-400" /> Старт ({selected.size})
+              </button>
+              <button className="btn-ghost transition-all active:scale-95" onClick={stopSelected}>
+                <Square size={14} className="text-red-400" /> Стоп ({selected.size})
+              </button>
+              <button className="btn-danger transition-all active:scale-95" onClick={deleteSelected}>
+                <Trash2 size={14} /> Удалить ({selected.size})
+              </button>
+            </>
           )}
-          <button className="btn-ghost" onClick={handleStopAll}>
-            <Square size={14} /> Стоп все
+          <button
+            className="btn-ghost transition-all active:scale-95 disabled:opacity-50"
+            onClick={handleStopAll}
+            disabled={isStoppingAll || activeCount === 0}
+          >
+            <Square size={14} className={isStoppingAll ? 'animate-pulse' : ''} />
+            {isStoppingAll ? 'Стоп...' : 'Стоп все'}
           </button>
-          <button className="btn-primary" onClick={handleStartAll}>
-            <Play size={14} /> Старт все
+          <button
+            className="btn-primary transition-all active:scale-95 disabled:opacity-50"
+            onClick={handleStartAll}
+            disabled={isStartingAll}
+          >
+            <Play size={14} className={isStartingAll ? 'animate-pulse' : ''} />
+            {isStartingAll ? 'Запуск...' : 'Старт все'}
           </button>
-          <button className="btn-ghost" onClick={() => setModal('import')}>
+          <button className="btn-ghost transition-all active:scale-95" onClick={() => setModal('import')}>
             <Upload size={14} /> Импорт
           </button>
-          <button className="btn-ghost" onClick={load}>
-            <RefreshCw size={14} />
+          <button
+            className="btn-ghost transition-all active:scale-95"
+            onClick={load}
+            disabled={isRefreshing}
+          >
+            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
           </button>
-          <button className="btn-primary" onClick={() => setModal('add')}>
+          <button className="btn-primary transition-all active:scale-95" onClick={() => setModal('add')}>
             <Plus size={14} /> Добавить
           </button>
         </div>
@@ -266,14 +407,28 @@ export default function Accounts() {
                   </td>
                   <td className="px-4 py-3 font-mono text-text-primary">{a.login}</td>
                   <td className="px-4 py-3">
-                    <span className={STATUS_BADGE[status] || 'badge-gray'}>
-                      {STATUS_LABEL[status] || status}
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <span className={STATUS_BADGE[status] || 'badge-gray'}>
+                        {STATUS_LABEL[status] || status}
+                      </span>
+                      {status === 'error' && workerStatuses[a.id]?.message && (
+                        <AlertTriangle
+                          size={13}
+                          title={workerStatuses[a.id].message}
+                          className="text-red-400 cursor-help shrink-0"
+                        />
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
-                    {a.isPrime
-                      ? <Shield size={14} className="text-yellow-400" />
-                      : <ShieldOff size={14} className="text-text-muted" />}
+                    <div className="relative group inline-flex">
+                      {a.isPrime
+                        ? <Shield size={14} className="text-yellow-400" />
+                        : <ShieldOff size={14} className="text-text-muted" />}
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-xs bg-gray-900 text-white rounded border border-border whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none z-50">
+                        {a.isPrime ? 'Прайм есть' : 'Прайм нету'}
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-text-secondary font-mono text-xs">
                     {a.proxy ? `${a.proxy.host}:${a.proxy.port}` : <span className="text-text-muted">—</span>}
@@ -326,6 +481,16 @@ export default function Accounts() {
 
       {modal === 'add'    && <AddAccountModal proxies={proxies} onSave={() => { load(); setModal(null) }} onClose={() => setModal(null)} />}
       {modal === 'import' && <ImportModal onSave={load} onClose={() => setModal(null)} />}
+      {steamGuardRequest && (
+        <SteamGuardModal
+          request={{
+            ...steamGuardRequest,
+            login: accounts.find(a => a.id === steamGuardRequest.accountId)?.login ?? String(steamGuardRequest.accountId),
+          }}
+          onSubmit={handleSteamGuardSubmit}
+          onClose={handleSteamGuardClose}
+        />
+      )}
     </div>
   )
 }

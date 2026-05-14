@@ -33,22 +33,33 @@ const CustomTooltip = ({ active, payload, label }) => {
   )
 }
 
+const ACTIVE_STATUSES = new Set(['online', 'farming', 'connecting', 'reconnecting', 'awaiting_guard'])
+
 export default function Dashboard() {
-  const [stats, setStats]   = useState(null)
+  const [stats, setStats]       = useState(null)
   const [accounts, setAccounts] = useState([])
+  const [workerStatuses, setWorkerStatuses] = useState({})
 
   useEffect(() => {
     Promise.all([
       window.api.drops.getStats(),
       window.api.accounts.getAll(),
-    ]).then(([s, a]) => {
+      window.api.farm.statuses(),
+    ]).then(([s, a, ws]) => {
       setStats(s)
       setAccounts(a)
+      setWorkerStatuses(ws || {})
     })
+
+    window.api.farm.onStatus(({ accountId, status }) => {
+      setWorkerStatuses(prev => ({ ...prev, [accountId]: { status } }))
+    })
+    return () => window.api.farm.offAll()
   }, [])
 
-  const online   = accounts.filter(a => a.status === 'farming' || a.status === 'online').length
-  const total    = accounts.length
+  const getStatus = (a) => workerStatuses[a.id]?.status ?? a.status
+  const online    = accounts.filter(a => ACTIVE_STATUSES.has(getStatus(a))).length
+  const total     = accounts.length
   const thisWeek = stats?.thisWeek?.count || 0
   const revenue  = stats?.thisWeek?.revenue?.toFixed(2) || '0.00'
 
@@ -89,12 +100,17 @@ export default function Dashboard() {
           <p className="text-sm font-medium text-text-primary mb-3">Статус аккаунтов</p>
           <div className="space-y-2">
             {[
-              { label: 'Фармят',    key: 'farming', cls: 'badge-green'  },
-              { label: 'Онлайн',   key: 'online',  cls: 'badge-blue'   },
-              { label: 'Ожидают',  key: 'idle',    cls: 'badge-gray'   },
-              { label: 'Забанены', key: 'banned',  cls: 'badge-red'    },
+              { label: 'Онлайн',        key: 'online',        cls: 'badge-green'  },
+              { label: 'Фармит',        key: 'farming',       cls: 'badge-green'  },
+              { label: 'Подключение',   key: 'connecting',    cls: 'badge-yellow' },
+              { label: 'Реконнект',     key: 'reconnecting',  cls: 'badge-yellow' },
+              { label: 'Ввод кода',     key: 'awaiting_guard',cls: 'badge-yellow' },
+              { label: 'Офлайн',        key: 'idle',          cls: 'badge-gray'   },
+              { label: 'Нет Prime',     key: 'no_prime',      cls: 'badge-orange' },
+              { label: 'Ошибка',        key: 'error',         cls: 'badge-red'    },
+              { label: 'Забанен',       key: 'banned',        cls: 'badge-red'    },
             ].map(({ label, key, cls }) => {
-              const count = accounts.filter(a => a.status === key).length
+              const count = accounts.filter(a => getStatus(a) === key).length
               return (
                 <div key={key} className="flex items-center justify-between">
                   <span className="text-text-secondary text-sm">{label}</span>

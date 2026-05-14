@@ -428,15 +428,16 @@ function waitLoggedOn(client, ms = 3e4) {
     client.once("error", onError);
   });
 }
-async function login(creds, proxyUrl) {
+async function login(creds, proxyUrl, { onSteamGuard, onLicenses } = {}) {
   if (!proxyUrl) {
     throw Object.assign(new Error("Прокси обязателен"), { code: "ERR_NO_PROXY" });
   }
   if (creds.refreshToken) {
     const client2 = makeClient(proxyUrl);
+    if (onLicenses) client2.once("licenses", (licenses) => onLicenses(licenses, client2));
     try {
       const p = waitLoggedOn(client2);
-      client2.login({ refreshToken: creds.refreshToken });
+      client2.logOn({ refreshToken: creds.refreshToken });
       await p;
       return { client: client2, refreshToken: creds.refreshToken };
     } catch (err) {
@@ -450,10 +451,16 @@ async function login(creds, proxyUrl) {
   client.once("refreshToken", (t) => {
     newToken = t;
   });
+  if (onLicenses) client.once("licenses", (licenses) => onLicenses(licenses, client));
+  if (onSteamGuard) {
+    client.on("steamGuard", (domain, callback, lastCodeWrong) => {
+      onSteamGuard(domain, callback, lastCodeWrong);
+    });
+  }
   try {
     const twoFactorCode = creds.sharedSecret ? SteamTotp.generateAuthCode(creds.sharedSecret) : void 0;
-    const p = waitLoggedOn(client);
-    client.login({ accountName: creds.login, password: creds.password, twoFactorCode });
+    const p = waitLoggedOn(client, onSteamGuard ? 6e5 : 3e4);
+    client.logOn({ accountName: creds.login, password: creds.password, twoFactorCode });
     await p;
   } catch (err) {
     client.logOff();
@@ -472,6 +479,7 @@ class SteamWorker extends events.EventEmitter {
     this.client = null;
     this._retries = 0;
     this._stopped = false;
+    this._steamGuardCallback = null;
   }
   async start() {
     this._stopped = false;
@@ -480,6 +488,7 @@ class SteamWorker extends events.EventEmitter {
   }
   stop() {
     this._stopped = true;
+    this._steamGuardCallback = null;
     if (this.client) {
       this.client.logOff();
       this.client.removeAllListeners();
@@ -495,50 +504,77 @@ class SteamWorker extends events.EventEmitter {
     const proxyUrl = proxyManager.getProxyUrl(creds.proxyId);
     if (!proxyUrl) return this._fatal("ERR_NO_PROXY", "Прокси не назначен — обязателен для защиты");
     try {
-      const { client, refreshToken } = await login(creds, proxyUrl);
+      const { client, refreshToken } = await login(creds, proxyUrl, {
+        onSteamGuard: (d, cb, wrong) => this._handleSteamGuard(d, cb, wrong),
+        onLicenses: (licenses, c) => this._handleLicenses(c, licenses)
+      });
       this.client = client;
       if (refreshToken && refreshToken !== creds.refreshToken) {
         accountManager.saveRefreshToken(this.accountId, refreshToken);
         this.emit("refreshToken", { accountId: this.accountId, token: refreshToken });
       }
       this._retries = 0;
+      console.log(`[SteamWorker ${this.accountId}] logged in as SteamID: ${client.steamID?.getSteamID64?.() ?? client.steamID}`);
       this._setupClientEvents();
     } catch (err) {
       if (this._stopped) return;
+      console.log(`[SteamWorker ${this.accountId}] login error — eresult:${err.eresult} code:${err.code} msg:${err.message}`);
       if (FATAL_ERESULTS.has(err.eresult)) {
         return this._fatal(err.code || "ERR_FATAL", err.message);
+      }
+      if (err.code === "ERR_LOGIN_TIMEOUT" && this._steamGuardCallback) {
+        this._steamGuardCallback = null;
+        return this._fatal("ERR_STEAM_GUARD_TIMEOUT", "Время ввода кода Steam Guard истекло (10 мин)");
       }
       this._retry();
     }
   }
+  _handleLicenses(client, licenses) {
+    if (this._stopped) return;
+    const { accountId } = this;
+    const hasPrime = licenses.some((l) => l.package_id === PRIME_PACKAGE_ID);
+    accountManager.update(accountId, { isPrime: hasPrime });
+    if (!hasPrime) {
+      this._setStatus("no_prime", "Нет Prime-статуса — аккаунт не может получать дропы");
+      client.removeAllListeners();
+      this.client = null;
+      client.logOff();
+      return;
+    }
+    client.setPersona(SteamUser.EPersonaState.Online);
+    client.gamesPlayed([730]);
+    console.log(`[SteamWorker ${accountId}] gamesPlayed(730) called, hasPrime: ${hasPrime}`);
+    this._setStatus("online");
+  }
   _setupClientEvents() {
-    const { client, accountId } = this;
-    client.once("licenses", (licenses) => {
-      if (this._stopped) return;
-      const hasPrime = licenses.some((l) => l.package_id === PRIME_PACKAGE_ID);
-      accountManager.update(accountId, { isPrime: hasPrime });
-      if (!hasPrime) {
-        this._setStatus("no_prime", "Нет Prime-статуса — аккаунт не может получать дропы");
-        client.removeAllListeners();
-        this.client = null;
-        client.logOff();
-        return;
-      }
-      client.gamesPlayed([730]);
-      this._setStatus("online");
-    });
+    const { client } = this;
     client.on("loggedOff", (eresult) => {
       if (this._stopped) return;
+      console.log(`[SteamWorker ${this.accountId}] loggedOff eresult:${eresult}`);
       client.removeAllListeners();
       this.client = null;
       FATAL_ERESULTS.has(eresult) ? this._fatal("ERR_LOGGED_OFF", `Steam отключил (EResult: ${eresult})`) : this._retry();
     });
     client.on("error", (err) => {
       if (this._stopped) return;
+      console.log(`[SteamWorker ${this.accountId}] client error — eresult:${err.eresult} msg:${err.message}`);
       client.removeAllListeners();
       this.client = null;
       FATAL_ERESULTS.has(err.eresult) ? this._fatal(err.code || "ERR_UNKNOWN", err.message) : this._retry();
     });
+  }
+  _handleSteamGuard(domain, callback, lastCodeWrong) {
+    if (this._stopped) return;
+    this._steamGuardCallback = callback;
+    const msg = domain ? `Введи код из email (${domain})` : "Введи код из мобильного аутентификатора Steam";
+    this._setStatus("awaiting_guard", msg);
+    this.emit("steamGuard", { accountId: this.accountId, domain, lastCodeWrong });
+  }
+  provideCode(code) {
+    if (this._steamGuardCallback) {
+      this._steamGuardCallback(code);
+      this._steamGuardCallback = null;
+    }
   }
   _retry() {
     if (this._stopped) return;
@@ -557,6 +593,7 @@ class SteamWorker extends events.EventEmitter {
   }
   _setStatus(status, message) {
     this.status = status;
+    console.log(`[SteamWorker ${this.accountId}] status: ${status}`, message || "");
     this.emit("statusChange", { accountId: this.accountId, status, message });
   }
 }
@@ -585,6 +622,10 @@ class WorkerManager {
     worker.on("error", (payload) => {
       this.webContents?.send("worker:error", payload);
     });
+    worker.on("steamGuard", (payload) => {
+      console.log("[WorkerManager] steamGuard event received:", payload);
+      this.webContents?.send("worker:steamGuard", payload);
+    });
     this.workers.set(accountId, worker);
     worker.start().catch(() => {
     });
@@ -612,6 +653,10 @@ class WorkerManager {
     }
     return result;
   }
+  provideCode(accountId, code) {
+    const worker = this.workers.get(accountId);
+    if (worker) worker.provideCode(code);
+  }
 }
 const workerManager = new WorkerManager();
 function setupIPC() {
@@ -636,8 +681,19 @@ function setupIPC() {
     accountManager.update(id, { status: "idle" });
     workerManager.webContents?.send("worker:statusChange", { accountId: id, status: "idle" });
   });
-  electron.ipcMain.handle("farm:stopAll", () => workerManager.stopAll());
+  electron.ipcMain.handle("farm:stopAll", async () => {
+    const ids = [...workerManager.workers.keys()];
+    await workerManager.stopAll();
+    for (const id of ids) {
+      accountManager.update(id, { status: "idle" });
+      workerManager.webContents?.send("worker:statusChange", { accountId: id, status: "idle" });
+    }
+  });
   electron.ipcMain.handle("farm:statuses", () => workerManager.getAllStatuses());
+  electron.ipcMain.handle(
+    "farm:steamGuardCode",
+    (_, accountId, code) => workerManager.provideCode(accountId, code)
+  );
 }
 function createWindow() {
   const win = new electron.BrowserWindow({

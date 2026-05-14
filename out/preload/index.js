@@ -37,9 +37,15 @@ electron.contextBridge.exposeInMainWorld("api", {
       electron.ipcRenderer.removeAllListeners("worker:error");
       electron.ipcRenderer.on("worker:error", (_, d) => cb(d));
     },
+    onSteamGuard: (cb) => {
+      electron.ipcRenderer.removeAllListeners("worker:steamGuard");
+      electron.ipcRenderer.on("worker:steamGuard", (_, d) => cb(d));
+    },
+    submitCode: (accountId, code) => electron.ipcRenderer.invoke("farm:steamGuardCode", accountId, code),
     offAll: () => {
       electron.ipcRenderer.removeAllListeners("worker:statusChange");
       electron.ipcRenderer.removeAllListeners("worker:error");
+      electron.ipcRenderer.removeAllListeners("worker:steamGuard");
     }
   },
   window: {

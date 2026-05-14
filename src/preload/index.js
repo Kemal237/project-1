@@ -37,9 +37,16 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.removeAllListeners('worker:error')
       ipcRenderer.on('worker:error', (_, d) => cb(d))
     },
+    onSteamGuard: (cb) => {
+      ipcRenderer.removeAllListeners('worker:steamGuard')
+      ipcRenderer.on('worker:steamGuard', (_, d) => cb(d))
+    },
+    submitCode: (accountId, code) =>
+      ipcRenderer.invoke('farm:steamGuardCode', accountId, code),
     offAll:   ()   => {
       ipcRenderer.removeAllListeners('worker:statusChange')
       ipcRenderer.removeAllListeners('worker:error')
+      ipcRenderer.removeAllListeners('worker:steamGuard')
     },
   },
   window: {

@@ -34,6 +34,11 @@ class WorkerManager {
       this.webContents?.send('worker:error', payload)
     })
 
+    worker.on('steamGuard', (payload) => {
+      console.log('[WorkerManager] steamGuard event received:', payload)
+      this.webContents?.send('worker:steamGuard', payload)
+    })
+
     this.workers.set(accountId, worker)
     worker.start().catch(() => {})
   }
@@ -63,6 +68,11 @@ class WorkerManager {
       result[id] = { status: worker.status }
     }
     return result
+  }
+
+  provideCode(accountId, code) {
+    const worker = this.workers.get(accountId)
+    if (worker) worker.provideCode(code)
   }
 }
 
