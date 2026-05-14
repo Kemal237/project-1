@@ -3,6 +3,7 @@ import accountManager from './modules/AccountManager'
 import proxyManager   from './modules/ProxyManager'
 import settings       from './modules/Settings'
 import dropTracker    from './modules/DropTracker'
+import workerManager  from './modules/WorkerManager'
 
 export function setupIPC() {
   ipcMain.handle('accounts:getAll',    ()           => accountManager.getAll())
@@ -23,4 +24,13 @@ export function setupIPC() {
   ipcMain.handle('drops:getAll',       ()           => dropTracker.getAll())
   ipcMain.handle('drops:getByAccount', (_, id)      => dropTracker.getByAccount(id))
   ipcMain.handle('drops:getStats',     ()           => dropTracker.getStats())
+
+  ipcMain.handle('farm:start',    (_, id) => workerManager.start(id))
+  ipcMain.handle('farm:stop',     (_, id) => {
+    workerManager.stop(id)
+    accountManager.update(id, { status: 'idle' })
+    workerManager.webContents?.send('worker:statusChange', { accountId: id, status: 'idle' })
+  })
+  ipcMain.handle('farm:stopAll',  ()      => workerManager.stopAll())
+  ipcMain.handle('farm:statuses', ()      => workerManager.getAllStatuses())
 }

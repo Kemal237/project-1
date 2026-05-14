@@ -24,11 +24,21 @@ contextBridge.exposeInMainWorld('api', {
     getByAccount: (id)         => ipcRenderer.invoke('drops:getByAccount', id),
     getStats:     ()           => ipcRenderer.invoke('drops:getStats'),
   },
-  window: {
-    minimize:     ()           => ipcRenderer.send('window:minimize'),
-    maximize:     ()           => ipcRenderer.send('window:maximize'),
-    close:        ()           => ipcRenderer.send('window:close'),
+  farm: {
+    start:    (id) => ipcRenderer.invoke('farm:start', id),
+    stop:     (id) => ipcRenderer.invoke('farm:stop', id),
+    stopAll:  ()   => ipcRenderer.invoke('farm:stopAll'),
+    statuses: ()   => ipcRenderer.invoke('farm:statuses'),
+    onStatus: (cb) => ipcRenderer.on('worker:statusChange', (_, d) => cb(d)),
+    onError:  (cb) => ipcRenderer.on('worker:error',        (_, d) => cb(d)),
+    offAll:   ()   => {
+      ipcRenderer.removeAllListeners('worker:statusChange')
+      ipcRenderer.removeAllListeners('worker:error')
+    },
   },
-  on:  (ch, cb) => { const allowed = ['farm:status','farm:drop','farm:log']; if (allowed.includes(ch)) ipcRenderer.on(ch, (_, ...a) => cb(...a)) },
-  off: (ch)     => ipcRenderer.removeAllListeners(ch),
+  window: {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    maximize: () => ipcRenderer.send('window:maximize'),
+    close:    () => ipcRenderer.send('window:close'),
+  },
 })

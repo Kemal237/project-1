@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { setupIPC } from './ipc'
 import db from './modules/Database'
+import workerManager from './modules/WorkerManager'
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -19,7 +20,6 @@ function createWindow() {
     },
   })
 
-  // Принудительно используем 127.0.0.1 вместо localhost (IPv6 vs IPv4 на Windows)
   const devUrl = process.env['ELECTRON_RENDERER_URL']
     ?.replace('localhost', '127.0.0.1')
 
@@ -45,6 +45,7 @@ function createWindow() {
 app.whenReady().then(async () => {
   await db.init()
   const win = createWindow()
+  workerManager.init(win.webContents)
   ipcMain.on('window:minimize', () => win.minimize())
   ipcMain.on('window:maximize', () => win.isMaximized() ? win.unmaximize() : win.maximize())
   ipcMain.on('window:close',    () => win.close())
