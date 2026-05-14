@@ -33,6 +33,7 @@ export class SteamWorker extends EventEmitter {
   }
 
   async _connect() {
+    if (this._stopped) return
     this._setStatus('connecting')
 
     const creds = accountManager.getCredentials(this.accountId)
@@ -71,6 +72,8 @@ export class SteamWorker extends EventEmitter {
 
       if (!hasPrime) {
         this._setStatus('no_prime', 'Нет Prime-статуса — аккаунт не может получать дропы')
+        client.removeAllListeners()
+        this.client = null
         client.logOff()
         return
       }
