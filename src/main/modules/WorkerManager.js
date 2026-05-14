@@ -20,6 +20,10 @@ class WorkerManager {
     worker.on('statusChange', (payload) => {
       accountManager.update(payload.accountId, { status: payload.status })
       this.webContents?.send('worker:statusChange', payload)
+      // Auto-remove dead workers from Map so they can be restarted
+      if (payload.status === 'error' || payload.status === 'no_prime') {
+        this.workers.delete(accountId)
+      }
     })
 
     worker.on('refreshToken', ({ accountId: id, token }) => {
@@ -37,6 +41,7 @@ class WorkerManager {
   async stop(accountId) {
     const worker = this.workers.get(accountId)
     if (!worker) return
+    worker.removeAllListeners()
     worker.stop()
     this.workers.delete(accountId)
   }
