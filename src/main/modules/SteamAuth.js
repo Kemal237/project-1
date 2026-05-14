@@ -1,21 +1,18 @@
-// src/main/modules/SteamAuth.js
 import SteamUser from 'steam-user'
 import SteamTotp from 'steam-totp'
 
-// EResult-коды → немедленная остановка, не повторять
 export const FATAL_ERESULTS = new Set([
-  SteamUser.EResult.Banned,                          // 76
-  SteamUser.EResult.InvalidPassword,                 // 5
-  SteamUser.EResult.RateLimitExceeded,               // 84
-  SteamUser.EResult.AccountLoginDeniedNeedTwoFactor, // 65
-  SteamUser.EResult.AccountDisabled,                 // 43
+  SteamUser.EResult.Banned,
+  SteamUser.EResult.InvalidPassword,
+  SteamUser.EResult.RateLimitExceeded,
+  SteamUser.EResult.AccountLoginDeniedNeedTwoFactor,
+  SteamUser.EResult.AccountDisabled,
 ])
 
-// EResult-коды → временная ошибка, можно повторить
 export const RETRY_ERESULTS = new Set([
-  SteamUser.EResult.TryAnotherCM,       // 92
-  SteamUser.EResult.NoConnection,       // 3
-  SteamUser.EResult.ServiceUnavailable, // 41
+  SteamUser.EResult.TryAnotherCM,
+  SteamUser.EResult.NoConnection,
+  SteamUser.EResult.ServiceUnavailable,
 ])
 
 function makeClient(proxyUrl) {
@@ -30,49 +27,65 @@ function makeClient(proxyUrl) {
 function waitLoggedOn(client, ms = 30_000) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(
-      () => reject(Object.assign(new Error('Login timeout'), { code: 'ERR_LOGIN_TIMEOUT' })),
+      () => {
+        client.removeListener('loggedOn', onLogged)
+        client.removeListener('error', onError)
+        reject(Object.assign(new Error('Login timeout'), { code: 'ERR_LOGIN_TIMEOUT' }))
+      },
       ms
     )
-    client.once('loggedOn', () => { clearTimeout(t); resolve() })
-    client.once('error', err => { clearTimeout(t); reject(err) })
+    function onLogged() {
+      clearTimeout(t)
+      client.removeListener('error', onError)
+      resolve()
+    }
+    function onError(err) {
+      clearTimeout(t)
+      client.removeListener('loggedOn', onLogged)
+      reject(err)
+    }
+    client.once('loggedOn', onLogged)
+    client.once('error', onError)
   })
 }
 
-/**
- * @param {object} creds - { login, password, sharedSecret, refreshToken }
- * @param {string|null} proxyUrl - 'socks5://user:pass@host:port' или null
- * @returns {Promise<{ client: SteamUser, refreshToken: string|null }>}
- */
 export async function login(creds, proxyUrl) {
   if (!proxyUrl) {
     throw Object.assign(new Error('Прокси обязателен'), { code: 'ERR_NO_PROXY' })
   }
 
-  // Попытка через refreshToken (без пароля и 2FA)
   if (creds.refreshToken) {
     const client = makeClient(proxyUrl)
     try {
+      const p = waitLoggedOn(client)
       client.login({ refreshToken: creds.refreshToken })
-      await waitLoggedOn(client)
+      await p
       return { client, refreshToken: creds.refreshToken }
-    } catch {
+    } catch (err) {
       client.logOff()
       client.removeAllListeners()
-      // Падаем на полный логин ниже
+      if (FATAL_ERESULTS.has(err.eresult)) throw err
+      // Временная ошибка — падаем на полный логин
     }
   }
 
-  // Полный логин с паролем и 2FA
   const client = makeClient(proxyUrl)
   let newToken = null
   client.once('refreshToken', t => { newToken = t })
 
-  const twoFactorCode = creds.sharedSecret
-    ? SteamTotp.generateAuthCode(creds.sharedSecret)
-    : undefined
+  try {
+    const twoFactorCode = creds.sharedSecret
+      ? SteamTotp.generateAuthCode(creds.sharedSecret)
+      : undefined
 
-  client.login({ accountName: creds.login, password: creds.password, twoFactorCode })
-  await waitLoggedOn(client)
+    const p = waitLoggedOn(client)
+    client.login({ accountName: creds.login, password: creds.password, twoFactorCode })
+    await p
+  } catch (err) {
+    client.logOff()
+    client.removeAllListeners()
+    throw err
+  }
 
   return { client, refreshToken: newToken }
 }
