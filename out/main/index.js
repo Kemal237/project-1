@@ -7,6 +7,9 @@ const fs = require("fs");
 const os = require("os");
 const https = require("https");
 const socksProxyAgent = require("socks-proxy-agent");
+const events = require("events");
+const SteamUser = require("steam-user");
+const SteamTotp = require("steam-totp");
 class Database {
   constructor() {
     this._key = this._deriveKey();
@@ -165,13 +168,13 @@ class AccountManager {
     }));
   }
   add(data) {
-    const { login, password, sharedSecret, identitySecret, proxyId, isPrime, notes } = data;
-    if (!login || !password) throw new Error("login и password обязательны");
+    const { login: login2, password, sharedSecret, identitySecret, proxyId, isPrime, notes } = data;
+    if (!login2 || !password) throw new Error("login и password обязательны");
     const r = db.run(`
       INSERT INTO accounts (login, password_enc, shared_secret_enc, identity_secret_enc, proxy_id, is_prime, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [
-      login.trim(),
+      login2.trim(),
       db.encrypt(password),
       db.encrypt(sharedSecret || ""),
       db.encrypt(identitySecret || ""),
@@ -179,7 +182,7 @@ class AccountManager {
       isPrime ? 1 : 0,
       notes || null
     ]);
-    return { id: r.lastInsertRowid, login: login.trim() };
+    return { id: r.lastInsertRowid, login: login2.trim() };
   }
   update(id, data) {
     const map = {
@@ -217,9 +220,9 @@ class AccountManager {
     const result = { success: 0, failed: 0, errors: [] };
     for (const line of lines) {
       try {
-        const [login, password, sharedSecret = "", identitySecret = ""] = line.split(":");
-        if (!login || !password) throw new Error("Нужны минимум login:password");
-        this.add({ login, password, sharedSecret, identitySecret });
+        const [login2, password, sharedSecret = "", identitySecret = ""] = line.split(":");
+        if (!login2 || !password) throw new Error("Нужны минимум login:password");
+        this.add({ login: login2, password, sharedSecret, identitySecret });
         result.success++;
       } catch (e) {
         result.failed++;
@@ -381,6 +384,236 @@ class DropTracker {
   }
 }
 const dropTracker = new DropTracker();
+const FATAL_ERESULTS = /* @__PURE__ */ new Set([
+  SteamUser.EResult.Banned,
+  SteamUser.EResult.InvalidPassword,
+  SteamUser.EResult.RateLimitExceeded,
+  SteamUser.EResult.AccountLoginDeniedNeedTwoFactor,
+  SteamUser.EResult.AccountDisabled
+]);
+/* @__PURE__ */ new Set([
+  SteamUser.EResult.TryAnotherCM,
+  SteamUser.EResult.NoConnection,
+  SteamUser.EResult.ServiceUnavailable
+]);
+function makeClient(proxyUrl) {
+  return new SteamUser({
+    dataDirectory: null,
+    autoRelogin: false,
+    enablePicsCache: false,
+    ...proxyUrl && { socksProxy: proxyUrl }
+  });
+}
+function waitLoggedOn(client, ms = 3e4) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(
+      () => {
+        client.removeListener("loggedOn", onLogged);
+        client.removeListener("error", onError);
+        reject(Object.assign(new Error("Login timeout"), { code: "ERR_LOGIN_TIMEOUT" }));
+      },
+      ms
+    );
+    function onLogged() {
+      clearTimeout(t);
+      client.removeListener("error", onError);
+      resolve();
+    }
+    function onError(err) {
+      clearTimeout(t);
+      client.removeListener("loggedOn", onLogged);
+      reject(err);
+    }
+    client.once("loggedOn", onLogged);
+    client.once("error", onError);
+  });
+}
+async function login(creds, proxyUrl) {
+  if (!proxyUrl) {
+    throw Object.assign(new Error("Прокси обязателен"), { code: "ERR_NO_PROXY" });
+  }
+  if (creds.refreshToken) {
+    const client2 = makeClient(proxyUrl);
+    try {
+      const p = waitLoggedOn(client2);
+      client2.login({ refreshToken: creds.refreshToken });
+      await p;
+      return { client: client2, refreshToken: creds.refreshToken };
+    } catch (err) {
+      client2.logOff();
+      client2.removeAllListeners();
+      if (FATAL_ERESULTS.has(err.eresult)) throw err;
+    }
+  }
+  const client = makeClient(proxyUrl);
+  let newToken = null;
+  client.once("refreshToken", (t) => {
+    newToken = t;
+  });
+  try {
+    const twoFactorCode = creds.sharedSecret ? SteamTotp.generateAuthCode(creds.sharedSecret) : void 0;
+    const p = waitLoggedOn(client);
+    client.login({ accountName: creds.login, password: creds.password, twoFactorCode });
+    await p;
+  } catch (err) {
+    client.logOff();
+    client.removeAllListeners();
+    throw err;
+  }
+  return { client, refreshToken: newToken };
+}
+const PRIME_PACKAGE_ID = 54029;
+const BACKOFF_MS = [5e3, 1e4, 2e4, 4e4, 8e4];
+class SteamWorker extends events.EventEmitter {
+  constructor(accountId) {
+    super();
+    this.accountId = accountId;
+    this.status = "idle";
+    this.client = null;
+    this._retries = 0;
+    this._stopped = false;
+  }
+  async start() {
+    this._stopped = false;
+    this._retries = 0;
+    await this._connect();
+  }
+  stop() {
+    this._stopped = true;
+    if (this.client) {
+      this.client.logOff();
+      this.client.removeAllListeners();
+      this.client = null;
+    }
+    this._setStatus("idle");
+  }
+  async _connect() {
+    if (this._stopped) return;
+    this._setStatus("connecting");
+    const creds = accountManager.getCredentials(this.accountId);
+    if (!creds) return this._fatal("ERR_NO_ACCOUNT", "Аккаунт не найден в базе");
+    const proxyUrl = proxyManager.getProxyUrl(creds.proxyId);
+    if (!proxyUrl) return this._fatal("ERR_NO_PROXY", "Прокси не назначен — обязателен для защиты");
+    try {
+      const { client, refreshToken } = await login(creds, proxyUrl);
+      this.client = client;
+      if (refreshToken && refreshToken !== creds.refreshToken) {
+        accountManager.saveRefreshToken(this.accountId, refreshToken);
+        this.emit("refreshToken", { accountId: this.accountId, token: refreshToken });
+      }
+      this._retries = 0;
+      this._setupClientEvents();
+    } catch (err) {
+      if (this._stopped) return;
+      if (FATAL_ERESULTS.has(err.eresult)) {
+        return this._fatal(err.code || "ERR_FATAL", err.message);
+      }
+      this._retry();
+    }
+  }
+  _setupClientEvents() {
+    const { client, accountId } = this;
+    client.once("licenses", (licenses) => {
+      if (this._stopped) return;
+      const hasPrime = licenses.some((l) => l.package_id === PRIME_PACKAGE_ID);
+      accountManager.update(accountId, { isPrime: hasPrime });
+      if (!hasPrime) {
+        this._setStatus("no_prime", "Нет Prime-статуса — аккаунт не может получать дропы");
+        client.removeAllListeners();
+        this.client = null;
+        client.logOff();
+        return;
+      }
+      client.gamesPlayed([730]);
+      this._setStatus("online");
+    });
+    client.on("loggedOff", (eresult) => {
+      if (this._stopped) return;
+      client.removeAllListeners();
+      this.client = null;
+      FATAL_ERESULTS.has(eresult) ? this._fatal("ERR_LOGGED_OFF", `Steam отключил (EResult: ${eresult})`) : this._retry();
+    });
+    client.on("error", (err) => {
+      if (this._stopped) return;
+      client.removeAllListeners();
+      this.client = null;
+      FATAL_ERESULTS.has(err.eresult) ? this._fatal(err.code || "ERR_UNKNOWN", err.message) : this._retry();
+    });
+  }
+  _retry() {
+    if (this._stopped) return;
+    if (this._retries >= BACKOFF_MS.length) {
+      return this._fatal("ERR_MAX_RETRIES", "Превышен лимит попыток реконнекта (5)");
+    }
+    const delay = BACKOFF_MS[this._retries++];
+    this._setStatus("reconnecting", `Реконнект через ${delay / 1e3}с (попытка ${this._retries}/${BACKOFF_MS.length})`);
+    setTimeout(() => {
+      if (!this._stopped) this._connect();
+    }, delay);
+  }
+  _fatal(code, message) {
+    this._setStatus("error", message);
+    this.emit("error", { accountId: this.accountId, code, message });
+  }
+  _setStatus(status, message) {
+    this.status = status;
+    this.emit("statusChange", { accountId: this.accountId, status, message });
+  }
+}
+class WorkerManager {
+  constructor() {
+    this.workers = /* @__PURE__ */ new Map();
+    this.webContents = null;
+  }
+  // Call once in main/index.js after createWindow(), passing win.webContents
+  init(webContents) {
+    this.webContents = webContents;
+  }
+  async start(accountId) {
+    if (this.workers.has(accountId)) return;
+    const worker = new SteamWorker(accountId);
+    worker.on("statusChange", (payload) => {
+      accountManager.update(payload.accountId, { status: payload.status });
+      this.webContents?.send("worker:statusChange", payload);
+      if (payload.status === "error" || payload.status === "no_prime") {
+        this.workers.delete(accountId);
+      }
+    });
+    worker.on("refreshToken", ({ accountId: id, token }) => {
+      accountManager.saveRefreshToken(id, token);
+    });
+    worker.on("error", (payload) => {
+      this.webContents?.send("worker:error", payload);
+    });
+    this.workers.set(accountId, worker);
+    worker.start().catch(() => {
+    });
+  }
+  async stop(accountId) {
+    const worker = this.workers.get(accountId);
+    if (!worker) return;
+    worker.removeAllListeners();
+    worker.stop();
+    this.workers.delete(accountId);
+  }
+  async stopAll() {
+    for (const id of [...this.workers.keys()]) {
+      await this.stop(id);
+    }
+  }
+  getStatus(accountId) {
+    const worker = this.workers.get(accountId);
+    return worker ? { status: worker.status } : null;
+  }
+  getAllStatuses() {
+    const result = {};
+    for (const [id, worker] of this.workers) {
+      result[id] = { status: worker.status };
+    }
+    return result;
+  }
+}
+const workerManager = new WorkerManager();
 function setupIPC() {
   electron.ipcMain.handle("accounts:getAll", () => accountManager.getAll());
   electron.ipcMain.handle("accounts:add", (_, d) => accountManager.add(d));
@@ -397,6 +630,14 @@ function setupIPC() {
   electron.ipcMain.handle("drops:getAll", () => dropTracker.getAll());
   electron.ipcMain.handle("drops:getByAccount", (_, id) => dropTracker.getByAccount(id));
   electron.ipcMain.handle("drops:getStats", () => dropTracker.getStats());
+  electron.ipcMain.handle("farm:start", (_, id) => workerManager.start(id));
+  electron.ipcMain.handle("farm:stop", async (_, id) => {
+    await workerManager.stop(id);
+    accountManager.update(id, { status: "idle" });
+    workerManager.webContents?.send("worker:statusChange", { accountId: id, status: "idle" });
+  });
+  electron.ipcMain.handle("farm:stopAll", () => workerManager.stopAll());
+  electron.ipcMain.handle("farm:statuses", () => workerManager.getAllStatuses());
 }
 function createWindow() {
   const win = new electron.BrowserWindow({
@@ -433,6 +674,7 @@ function createWindow() {
 electron.app.whenReady().then(async () => {
   await db.init();
   const win = createWindow();
+  workerManager.init(win.webContents);
   electron.ipcMain.on("window:minimize", () => win.minimize());
   electron.ipcMain.on("window:maximize", () => win.isMaximized() ? win.unmaximize() : win.maximize());
   electron.ipcMain.on("window:close", () => win.close());
