@@ -29,8 +29,14 @@ contextBridge.exposeInMainWorld('api', {
     stop:     (id) => ipcRenderer.invoke('farm:stop', id),
     stopAll:  ()   => ipcRenderer.invoke('farm:stopAll'),
     statuses: ()   => ipcRenderer.invoke('farm:statuses'),
-    onStatus: (cb) => ipcRenderer.on('worker:statusChange', (_, d) => cb(d)),
-    onError:  (cb) => ipcRenderer.on('worker:error',        (_, d) => cb(d)),
+    onStatus: (cb) => {
+      ipcRenderer.removeAllListeners('worker:statusChange')
+      ipcRenderer.on('worker:statusChange', (_, d) => cb(d))
+    },
+    onError: (cb) => {
+      ipcRenderer.removeAllListeners('worker:error')
+      ipcRenderer.on('worker:error', (_, d) => cb(d))
+    },
     offAll:   ()   => {
       ipcRenderer.removeAllListeners('worker:statusChange')
       ipcRenderer.removeAllListeners('worker:error')

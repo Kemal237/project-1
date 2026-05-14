@@ -26,8 +26,8 @@ export function setupIPC() {
   ipcMain.handle('drops:getStats',     ()           => dropTracker.getStats())
 
   ipcMain.handle('farm:start',    (_, id) => workerManager.start(id))
-  ipcMain.handle('farm:stop',     (_, id) => {
-    workerManager.stop(id)
+  ipcMain.handle('farm:stop', async (_, id) => {
+    await workerManager.stop(id)
     accountManager.update(id, { status: 'idle' })
     workerManager.webContents?.send('worker:statusChange', { accountId: id, status: 'idle' })
   })
