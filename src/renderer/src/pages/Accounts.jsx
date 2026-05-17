@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight } from 'lucide-react'
+import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight, Gamepad2 } from 'lucide-react'
 
 const STATUS_BADGE = {
   online:         'badge-green',
@@ -9,6 +9,7 @@ const STATUS_BADGE = {
   cs2_searching:  'badge-yellow',
   cs2_loading:    'badge-yellow',
   cs2_match:      'badge-green',
+  cs2_lobby:      'badge-blue',
   connecting:     'badge-yellow',
   reconnecting:   'badge-yellow',
   idle:           'badge-gray',
@@ -27,6 +28,7 @@ const STATUS_LABEL = {
   cs2_searching:  'Ищет матч',
   cs2_loading:    'Загрузка...',
   cs2_match:      'В матче',
+  cs2_lobby:      'Лобби CS2',
   connecting:     'Подключение...',
   reconnecting:   'Реконнект...',
   idle:           'Офлайн',
@@ -37,7 +39,7 @@ const STATUS_LABEL = {
   awaiting_guard: 'Введи код',
 }
 
-const CS2_STATUSES = new Set(['farming', 'lobby', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match'])
+const CS2_STATUSES = new Set(['farming', 'lobby', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_lobby'])
 
 const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard'])
 
@@ -399,6 +401,11 @@ export default function Accounts() {
 
   const handleSteamGuardClose = () => setSteamGuardRequest(null)
 
+  const CS2_ACTIVE = new Set(['cs2_launching', 'cs2_lobby'])
+
+  const handleStartCS2 = async (id) => { await window.api.launcher.start(id) }
+  const handleStopCS2  = async (id) => { await window.api.launcher.stop(id) }
+
   const filtered = accounts.filter(a =>
     a.login.toLowerCase().includes(search.toLowerCase())
   )
@@ -606,9 +613,23 @@ export default function Accounts() {
                           ? <button className="btn-ghost p-1.5" title="Отключить" onClick={() => handleStop(a.id)}>
                               <Square size={13} className="text-red-400" />
                             </button>
-                          : <button className="btn-ghost p-1.5" title="Подключить" onClick={() => handleStart(a.id)}>
-                              <Play size={13} className="text-green-400" />
+                          : <button className="btn-ghost p-1.5" title="Подключить"
+                              onClick={() => handleStart(a.id)}
+                              disabled={CS2_ACTIVE.has(status)}>
+                              <Play size={13} className={CS2_ACTIVE.has(status) ? 'text-text-muted opacity-40' : 'text-green-400'} />
                             </button>
+                      )}
+                      {CS2_ACTIVE.has(status) ? (
+                        <button className="btn-ghost p-1.5" title="Остановить CS2"
+                          onClick={() => handleStopCS2(a.id)}>
+                          <Gamepad2 size={13} className="text-red-400" />
+                        </button>
+                      ) : (
+                        <button className="btn-ghost p-1.5" title="Запустить CS2"
+                          onClick={() => handleStartCS2(a.id)}
+                          disabled={active}>
+                          <Gamepad2 size={13} className={active ? 'text-text-muted opacity-40' : 'text-blue-400'} />
+                        </button>
                       )}
                       <button className="btn-ghost p-1.5" title="Редактировать" onClick={() => setEditId(a.id)}>
                         <Pencil size={13} className="text-text-muted" />
