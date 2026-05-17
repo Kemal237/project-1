@@ -34,36 +34,42 @@ class CS2Launcher extends EventEmitter {
 
   async start(accountId, creds, onStatus) {
     if (this._active.has(accountId)) return
+    this._active.set(accountId, null) // reserve slot immediately to prevent race
 
-    const sbPath = this._findSandboxie()
-    if (!sbPath) throw new Error('Sandboxie не найден. Проверь установку.')
+    try {
+      const sbPath = this._findSandboxie()
+      if (!sbPath) throw new Error('Sandboxie не найден. Проверь установку.')
 
-    const steamPath = await steamConfigPatcher.detectSteamPath()
-    if (!steamPath) throw new Error('Steam не найден. Установи Steam.')
+      const steamPath = await steamConfigPatcher.detectSteamPath()
+      if (!steamPath) throw new Error('Steam не найден. Установи Steam.')
 
-    const boxName = `CS2Bot_${accountId}`
+      const boxName = `CS2Bot_${accountId}`
 
-    onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
-    this._configureSandboxBox(boxName, steamPath)
+      onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
+      this._configureSandboxBox(boxName, steamPath)
 
-    this._active.set(accountId, { boxName, sbPath, steamPath })
+      this._active.set(accountId, { boxName, sbPath, steamPath })
 
-    onStatus('cs2_launching', 'Запуск Steam в боксе...')
-    this._spawnInBox(sbPath, boxName, steamPath, [
-      '-login', creds.login, creds.password,
-      '-silent', '-noreactlogin',
-    ])
+      onStatus('cs2_launching', 'Запуск Steam в боксе...')
+      this._spawnInBox(sbPath, boxName, steamPath, [
+        '-login', creds.login, creds.password,
+        '-silent', '-noreactlogin',
+      ])
 
-    await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
+      await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
 
-    onStatus('cs2_launching', 'Запуск CS2...')
-    this._spawnInBox(sbPath, boxName, steamPath, [
-      '-applaunch', '730', ...CS2_FLAGS,
-    ])
+      onStatus('cs2_launching', 'Запуск CS2...')
+      this._spawnInBox(sbPath, boxName, steamPath, [
+        '-applaunch', '730', ...CS2_FLAGS,
+      ])
 
-    await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS)
+      await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS)
 
-    onStatus('cs2_lobby', 'CS2 запущен — в лобби')
+      onStatus('cs2_lobby', 'CS2 запущен — в лобби')
+    } catch (e) {
+      this._active.delete(accountId) // rollback slot reservation on failure
+      throw e
+    }
   }
 
   stop(accountId) {
@@ -110,11 +116,7 @@ class CS2Launcher extends EventEmitter {
       '',
     ].join('\r\n')
 
-    try {
-      writeFileSync(iniPath, ini + entry, 'utf16le')
-    } catch (e) {
-      console.log('[CS2Launcher] Cannot write Sandboxie.ini:', e.message)
-    }
+    writeFileSync(iniPath, ini + entry, 'utf16le') // throws on failure — caller handles it
   }
 
   _spawnInBox(sbPath, boxName, steamPath, args) {
@@ -128,16 +130,22 @@ class CS2Launcher extends EventEmitter {
 
   _waitForProcess(name, timeoutMs, pollMs) {
     return new Promise((resolve, reject) => {
+      let done = false
       const deadline = Date.now() + timeoutMs
       const check = () => {
+        if (done) return
         try {
           const out = execSync(
             `tasklist /FI "IMAGENAME eq ${name}.exe" /NH`,
             { encoding: 'utf8', timeout: 5000 }
           )
-          if (out.toLowerCase().includes(`${name}.exe`)) return resolve()
+          if (out.toLowerCase().includes(`${name}.exe`)) {
+            done = true
+            return resolve()
+          }
         } catch {}
         if (Date.now() > deadline) {
+          done = true
           return reject(new Error(`Timeout: ${name}.exe не запустился за ${timeoutMs / 1000}с`))
         }
         setTimeout(check, pollMs)
