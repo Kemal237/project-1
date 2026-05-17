@@ -146,8 +146,8 @@ export default function Proxies() {
                 </td>
                 <td className="px-4 py-3">
                   {p.isValid
-                    ? <span className="badge-green"><CheckCircle size={10} /> Активен</span>
-                    : <span className="badge-red"><XCircle size={10} /> Недоступен</span>}
+                    ? <span className="badge-green">Активен</span>
+                    : <span className="badge-red">Недоступен</span>}
                 </td>
                 <td className="px-4 py-3 font-mono text-text-secondary text-xs">
                   {p.lastIp || '—'}
