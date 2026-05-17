@@ -6,6 +6,7 @@ import settings          from './modules/Settings'
 import dropTracker       from './modules/DropTracker'
 import workerManager     from './modules/WorkerManager'
 import sandboxieManager  from './modules/SandboxieManager'
+import cs2Launcher      from './modules/CS2Launcher'
 
 export function setupIPC() {
   ipcMain.handle('accounts:getAll',    ()           => accountManager.getAll())
@@ -46,6 +47,33 @@ export function setupIPC() {
   ipcMain.handle('farm:steamGuardCode', (_, accountId, code) =>
     workerManager.provideCode(accountId, code)
   )
+
+  ipcMain.handle('launcher:start', async (_, accountId) => {
+    const creds = accountManager.getCredentials(accountId)
+    if (!creds) return { ok: false, error: 'Аккаунт не найден' }
+
+    await workerManager.stop(accountId)
+    accountManager.update(accountId, { status: 'cs2_launching' })
+
+    const send = (status, message) => {
+      accountManager.update(accountId, { status })
+      workerManager.webContents?.send('worker:statusChange', { accountId, status, message })
+    }
+
+    cs2Launcher.start(accountId, creds, send).catch(err => {
+      send('error', err.message)
+      cs2Launcher.stop(accountId)
+    })
+
+    return { ok: true }
+  })
+
+  ipcMain.handle('launcher:stop', async (_, accountId) => {
+    cs2Launcher.stop(accountId)
+    accountManager.update(accountId, { status: 'idle' })
+    workerManager.webContents?.send('worker:statusChange', { accountId, status: 'idle' })
+    return { ok: true }
+  })
 
   ipcMain.handle('updater:getVersion', () => app.getVersion())
   ipcMain.handle('updater:check',     () => app.isPackaged ? autoUpdater.checkForUpdates() : null)
