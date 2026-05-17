@@ -77,6 +77,7 @@ export function setupIPC() {
 
   ipcMain.handle('updater:getVersion', () => app.getVersion())
   ipcMain.handle('updater:check',     () => app.isPackaged ? autoUpdater.checkForUpdates() : null)
+  ipcMain.handle('updater:download',  () => autoUpdater.downloadUpdate())
   ipcMain.handle('updater:install',   () => autoUpdater.quitAndInstall(false, true))
 
   ipcMain.handle('sandboxie:status', () => sandboxieManager.getStatus())

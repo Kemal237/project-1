@@ -2,21 +2,16 @@ import { useEffect, useState, useCallback } from 'react'
 import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw } from 'lucide-react'
 
 function UpdaterSection() {
-  const [version, setVersion] = useState('')
-  const [phase,   setPhase]   = useState('idle')
-  const [percent, setPercent] = useState(0)
-  const [newVer,  setNewVer]  = useState('')
-  const [error,   setError]   = useState('')
+  const [version,  setVersion]  = useState('')
+  const [phase,    setPhase]    = useState('idle') // idle | checking | upToDate | error
+  const [error,    setError]    = useState('')
   const [spinning, setSpinning] = useState(false)
 
   useEffect(() => {
     window.api.updater.getVersion().then(setVersion)
-    window.api.updater.onAvailable(info => { setPhase('available'); setNewVer(info.version); setSpinning(false) })
     window.api.updater.onUpToDate(() => { setPhase('upToDate'); setSpinning(false) })
-    window.api.updater.onProgress(p => { setPhase('downloading'); setPercent(Math.round(p.percent)) })
-    window.api.updater.onDownloaded(() => setPhase('ready'))
-    window.api.updater.onError(msg => { setPhase('error'); setError(msg); setSpinning(false) })
-    return () => window.api.updater.offAll()
+    window.api.updater.onError(msg  => { setPhase('error'); setError(msg); setSpinning(false) })
+    return () => window.api.updater.offSettings()
   }, [])
 
   const check = async () => {
@@ -27,6 +22,7 @@ function UpdaterSection() {
       window.api.updater.check(),
       new Promise(r => setTimeout(r, 700)),
     ])
+    setSpinning(false)
   }
 
   return (
@@ -41,31 +37,12 @@ function UpdaterSection() {
           <p className="text-xs text-text-muted font-mono">v{version || '—'}</p>
         </div>
         <div className="flex items-center gap-2">
-          {phase === 'upToDate'  && <span className="badge badge-green">Актуальная версия</span>}
-          {phase === 'available' && <span className="badge badge-yellow">Доступна v{newVer}</span>}
-          {phase === 'ready' && (
-            <button className="btn-primary" onClick={() => window.api.updater.install()}>
-              <Download size={13} /> Установить и перезапустить
-            </button>
-          )}
+          {phase === 'upToDate' && <span className="badge badge-green">Актуальная версия</span>}
           <button className="btn-ghost p-1" onClick={check} disabled={spinning} title="Проверить обновления">
             {spinning ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
           </button>
         </div>
       </div>
-
-      {phase === 'downloading' && (
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-xs text-text-muted">
-            <span>Скачивание обновления...</span>
-            <span>{percent}%</span>
-          </div>
-          <div className="w-full bg-bg-secondary rounded-full h-1.5">
-            <div className="bg-accent-blue h-1.5 rounded-full transition-all duration-300"
-                 style={{ width: `${percent}%` }} />
-          </div>
-        </div>
-      )}
 
       {phase === 'error' && (
         <div className="flex items-start gap-2 text-red-400 text-xs">

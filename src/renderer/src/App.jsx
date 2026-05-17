@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import Sidebar     from './components/Sidebar'
-import TitleBar    from './components/TitleBar'
-import SetupModal  from './components/SetupModal'
+import { useState, useEffect } from 'react'
+import Sidebar      from './components/Sidebar'
+import TitleBar     from './components/TitleBar'
+import SetupModal   from './components/SetupModal'
+import UpdateModal  from './components/UpdateModal'
 import Dashboard   from './pages/Dashboard'
 import Accounts    from './pages/Accounts'
 import FarmGroups  from './pages/FarmGroups'
@@ -19,9 +20,15 @@ const PAGES = {
 }
 
 export default function App() {
-  const [page, setPage]       = useState('dashboard')
+  const [page, setPage]           = useState('dashboard')
   const [setupDone, setSetupDone] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState(null)
   const Page = PAGES[page] || Dashboard
+
+  useEffect(() => {
+    window.api.updater.onAvailable(info => setUpdateInfo(info))
+    // Listener persists for app lifetime — no cleanup needed
+  }, [])
 
   return (
     <div className="flex flex-col h-screen bg-bg-primary overflow-hidden">
@@ -33,6 +40,7 @@ export default function App() {
         </main>
       </div>
       {!setupDone && <SetupModal onDone={() => setSetupDone(true)} />}
+      {updateInfo && <UpdateModal info={updateInfo} onDismiss={() => setUpdateInfo(null)} />}
     </div>
   )
 }

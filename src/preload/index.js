@@ -62,15 +62,20 @@ contextBridge.exposeInMainWorld('api', {
   updater: {
     getVersion: ()    => ipcRenderer.invoke('updater:getVersion'),
     check:      ()    => ipcRenderer.invoke('updater:check'),
+    download:   ()    => ipcRenderer.invoke('updater:download'),
     install:    ()    => ipcRenderer.invoke('updater:install'),
     onAvailable:   (cb) => ipcRenderer.on('updater:available',  (_, i) => cb(i)),
     onUpToDate:    (cb) => ipcRenderer.on('updater:upToDate',   ()     => cb()),
     onProgress:    (cb) => ipcRenderer.on('updater:progress',   (_, p) => cb(p)),
     onDownloaded:  (cb) => ipcRenderer.on('updater:downloaded', (_, i) => cb(i)),
     onError:       (cb) => ipcRenderer.on('updater:error',      (_, e) => cb(e)),
-    offAll: () => {
-      ['updater:available','updater:upToDate','updater:progress','updater:downloaded','updater:error']
-        .forEach(ch => ipcRenderer.removeAllListeners(ch))
+    offModal: () => {
+      ipcRenderer.removeAllListeners('updater:progress')
+      ipcRenderer.removeAllListeners('updater:downloaded')
+    },
+    offSettings: () => {
+      ipcRenderer.removeAllListeners('updater:upToDate')
+      ipcRenderer.removeAllListeners('updater:error')
     },
   },
   sandboxie: {

@@ -79,7 +79,7 @@ app.whenReady().then(async () => {
   setupIPC()
 
   if (app.isPackaged) {
-    autoUpdater.autoDownload = true
+    autoUpdater.autoDownload = false
     autoUpdater.on('update-available',  (info) => win.webContents.send('updater:available', info))
     autoUpdater.on('update-not-available', ()   => win.webContents.send('updater:upToDate'))
     autoUpdater.on('download-progress', (prog) => win.webContents.send('updater:progress', prog))
