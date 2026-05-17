@@ -42,6 +42,12 @@ function createWindow() {
     return { action: 'deny' }
   })
 
+  win.webContents.on('before-input-event', (_, input) => {
+    if ((input.control && input.shift && input.key === 'I') || input.key === 'F12') {
+      win.webContents.toggleDevTools()
+    }
+  })
+
   return win
 }
 

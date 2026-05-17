@@ -159,6 +159,7 @@ export class SteamWorker extends EventEmitter {
     if (this._steamGuardCallback) {
       this._steamGuardCallback(code)
       this._steamGuardCallback = null
+      if (!this._stopped) this._setStatus('connecting', 'Ожидание подтверждения Steam...')
     }
   }
 

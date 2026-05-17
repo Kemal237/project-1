@@ -118,12 +118,12 @@ function SteamGuardModal({ request, onSubmit, onClose }) {
               Подтвердить
             </button>
           </div>
-          {request.isSandbox && (
+          {!request.domain && (
             <button
-              className="btn-ghost text-xs text-text-muted w-full justify-center"
+              className="btn-ghost text-xs w-full justify-center border border-border/50 rounded-md py-2"
               onClick={() => onSubmit(request.accountId, null)}
             >
-              ✓ Уже подтвердил на телефоне (mobile push)
+              ✓ Я подтвердил вход в мобильном приложении Steam
             </button>
           )}
         </div>
