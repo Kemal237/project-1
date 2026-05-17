@@ -47,8 +47,7 @@ class CS2Launcher extends EventEmitter {
 
       onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
       this._configureSandboxBox(boxName, steamPath)
-
-      this._active.set(accountId, { boxName, sbPath, steamPath })
+      this._active.set(accountId, { boxName, sbPath, steamPath }) // set real entry before status so stop() works
 
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
       this._spawnInBox(sbPath, boxName, steamPath, [
