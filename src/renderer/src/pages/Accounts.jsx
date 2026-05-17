@@ -191,26 +191,38 @@ function AddAccountModal({ proxies, onSave, onClose }) {
 
 function EditAccountModal({ account, proxies, onSave, onClose }) {
   const [form, setForm] = useState({
-    login:          account.login          || '',
+    login:          account.login || '',
     password:       '',
     sharedSecret:   '',
     identitySecret: '',
     proxyId:        account.proxyId != null ? String(account.proxyId) : '',
-    notes:          account.notes          || '',
+    notes:          account.notes || '',
   })
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    window.api.accounts.getCredentials(account.id).then(creds => {
+      if (creds) setForm(f => ({
+        ...f,
+        sharedSecret:   creds.sharedSecret   || '',
+        identitySecret: creds.identitySecret || '',
+      }))
+      setLoading(false)
+    })
+  }, [account.id])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const save = async () => {
     if (!form.login) return
     const patch = {
-      login:   form.login,
-      proxyId: form.proxyId || null,
-      notes:   form.notes,
+      login:          form.login,
+      proxyId:        form.proxyId || null,
+      notes:          form.notes,
+      sharedSecret:   form.sharedSecret,
+      identitySecret: form.identitySecret,
     }
-    if (form.password)       patch.password       = form.password
-    if (form.sharedSecret)   patch.sharedSecret   = form.sharedSecret
-    if (form.identitySecret) patch.identitySecret = form.identitySecret
+    if (form.password) patch.password = form.password
     await window.api.accounts.update(account.id, patch)
     onSave()
   }
@@ -218,25 +230,28 @@ function EditAccountModal({ account, proxies, onSave, onClose }) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-bg-card border border-border rounded-xl w-[440px] p-6" onClick={e => e.stopPropagation()}>
-        <h2 className="text-base font-semibold text-text-primary mb-1">Редактировать аккаунт</h2>
-        <p className="text-xs text-text-muted mb-5 font-mono">{account.login}</p>
+        <h2 className="text-base font-semibold text-text-primary mb-5">Редактировать аккаунт</h2>
         <div className="space-y-3">
           <div>
             <label className="label">Логин *</label>
-            <input className="input" value={form.login} onChange={e => set('login', e.target.value)} />
+            <input className="input" value={form.login} onChange={e => set('login', e.target.value)} placeholder="steam_login" />
           </div>
           <div>
-            <label className="label">Новый пароль <span className="text-text-muted">(оставь пустым чтобы не менять)</span></label>
+            <label className="label">Пароль <span className="text-text-muted">(оставь пустым чтобы не менять)</span></label>
             <input className="input" type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Shared Secret</label>
-              <input className="input font-mono text-xs" value={form.sharedSecret} onChange={e => set('sharedSecret', e.target.value)} placeholder="Оставь пустым" />
+              <input className="input font-mono text-xs" value={form.sharedSecret}
+                onChange={e => set('sharedSecret', e.target.value)}
+                placeholder={loading ? 'Загрузка...' : '2FA Secret'} disabled={loading} />
             </div>
             <div>
               <label className="label">Identity Secret</label>
-              <input className="input font-mono text-xs" value={form.identitySecret} onChange={e => set('identitySecret', e.target.value)} placeholder="Оставь пустым" />
+              <input className="input font-mono text-xs" value={form.identitySecret}
+                onChange={e => set('identitySecret', e.target.value)}
+                placeholder={loading ? 'Загрузка...' : 'Trade Secret'} disabled={loading} />
             </div>
           </div>
           <div>
@@ -255,7 +270,7 @@ function EditAccountModal({ account, proxies, onSave, onClose }) {
         </div>
         <div className="flex gap-2 mt-5 justify-end">
           <button className="btn-ghost" onClick={onClose}>Отмена</button>
-          <button className="btn-primary" onClick={save}>Сохранить</button>
+          <button className="btn-primary" onClick={save} disabled={loading}>Сохранить</button>
         </div>
       </div>
     </div>
