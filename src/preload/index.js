@@ -82,6 +82,10 @@ contextBridge.exposeInMainWorld('api', {
     },
     offProgress: ()   => ipcRenderer.removeAllListeners('sandboxie:progress'),
   },
+  launcher: {
+    start: (accountId) => ipcRenderer.invoke('launcher:start', accountId),
+    stop:  (accountId) => ipcRenderer.invoke('launcher:stop',  accountId),
+  },
   dialog: {
     openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
   },
