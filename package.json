@@ -45,7 +45,8 @@
     "publish": {
       "provider": "github",
       "owner": "Kemal237",
-      "repo": "project-1"
+      "repo": "project-1",
+      "releaseType": "release"
     }
   },
   "dependencies": {
