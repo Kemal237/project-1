@@ -36,8 +36,17 @@ function UpdaterSection() {
           <p className="text-xs text-text-muted font-mono">v{version || '—'}</p>
         </div>
         <div className="flex items-center gap-2">
-          {phase === 'idle'      && <button className="btn-ghost" onClick={check}><RefreshCw size={13} /> Проверить</button>}
-          {phase === 'checking'  && <span className="badge badge-blue">Проверка...</span>}
+          {(phase === 'idle' || phase === 'upToDate' || phase === 'available' || phase === 'ready') && (
+            <button className="btn-ghost" onClick={check}>
+              <RefreshCw size={13} className={phase === 'checking' ? 'animate-spin' : ''} />
+              {phase === 'idle' ? 'Проверить' : 'Проверить снова'}
+            </button>
+          )}
+          {phase === 'checking'  && (
+            <button className="btn-ghost" disabled>
+              <RefreshCw size={13} className="animate-spin" /> Проверка...
+            </button>
+          )}
           {phase === 'upToDate'  && <span className="badge badge-green">Актуальная версия</span>}
           {phase === 'available' && <span className="badge badge-yellow">Доступна v{newVer}</span>}
           {phase === 'ready'     && (
@@ -70,12 +79,6 @@ function UpdaterSection() {
           <button className="btn-ghost text-xs" onClick={() => setPhase('idle')}>Сбросить</button>
         </div>
       )}
-
-      {(phase === 'upToDate' || phase === 'available' || phase === 'ready') && (
-        <button className="btn-ghost text-xs" onClick={() => setPhase('idle')}>
-          <RefreshCw size={12} /> Проверить снова
-        </button>
-      )}
     </div>
   )
 }
@@ -86,9 +89,15 @@ function SandboxieSection() {
   const [progress, setProgress] = useState('')
   const [error,    setError]    = useState('')
 
+  const [spinning, setSpinning] = useState(false)
+
   const refresh = useCallback(() => {
     setStatus(null)
-    window.api.sandboxie.status().then(setStatus)
+    setSpinning(true)
+    Promise.all([
+      window.api.sandboxie.status().then(setStatus),
+      new Promise(r => setTimeout(r, 700)),
+    ]).finally(() => setSpinning(false))
   }, [])
 
   useEffect(() => {
@@ -138,8 +147,8 @@ function SandboxieSection() {
           ) : (
             <span className="badge badge-red">Не установлен</span>
           )}
-          <button className="btn-ghost p-1" onClick={refresh} title="Обновить">
-            <RefreshCw size={13} />
+          <button className="btn-ghost p-1" onClick={refresh} title="Обновить" disabled={spinning}>
+            <RefreshCw size={13} className={spinning ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
