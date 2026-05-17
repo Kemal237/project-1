@@ -6,6 +6,7 @@ class AccountManager {
       SELECT a.id, a.login, a.proxy_id, a.status, a.xp_progress,
              a.drops_total, a.drops_this_week, a.last_drop_at, a.last_login_at,
              a.is_prime, a.is_limited, a.warmup_week, a.notes, a.created_at,
+             a.shared_secret_enc, a.identity_secret_enc,
              p.host AS proxy_host, p.port AS proxy_port,
              p.username AS proxy_user, p.type AS proxy_type, p.is_valid AS proxy_valid
       FROM accounts a LEFT JOIN proxies p ON a.proxy_id = p.id
@@ -17,6 +18,8 @@ class AccountManager {
       lastLoginAt: r.last_login_at, isPrime: !!r.is_prime,
       isLimited: !!r.is_limited, warmupWeek: r.warmup_week,
       notes: r.notes, createdAt: r.created_at,
+      hasSharedSecret:   !!db.decrypt(r.shared_secret_enc),
+      hasIdentitySecret: !!db.decrypt(r.identity_secret_enc),
       proxy: r.proxy_host ? {
         id: r.proxy_id, host: r.proxy_host, port: r.proxy_port,
         username: r.proxy_user, type: r.proxy_type, isValid: !!r.proxy_valid,
@@ -61,7 +64,18 @@ class AccountManager {
     db.run(`UPDATE accounts SET ${fields.join(', ')} WHERE id = ?`, values)
   }
 
-  delete(id) { db.run('DELETE FROM accounts WHERE id = ?', [id]) }
+  delete(id) {
+    db.run('DELETE FROM accounts WHERE id = ?', [id])
+    db.run('DELETE FROM drops WHERE account_id = ?', [id])
+  }
+
+  resetStatuses() {
+    db.run("UPDATE accounts SET status = 'idle' WHERE status != 'idle'")
+  }
+
+  resetWeeklyDrops() {
+    db.run('UPDATE accounts SET drops_this_week = 0')
+  }
 
   importFromText(text) {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean)

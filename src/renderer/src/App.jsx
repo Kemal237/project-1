@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import Sidebar from './components/Sidebar'
-import TitleBar from './components/TitleBar'
-import Dashboard from './pages/Dashboard'
-import Accounts from './pages/Accounts'
-import FarmGroups from './pages/FarmGroups'
-import Drops from './pages/Drops'
-import Proxies from './pages/Proxies'
-import Settings from './pages/Settings'
+import Sidebar     from './components/Sidebar'
+import TitleBar    from './components/TitleBar'
+import SetupModal  from './components/SetupModal'
+import Dashboard   from './pages/Dashboard'
+import Accounts    from './pages/Accounts'
+import FarmGroups  from './pages/FarmGroups'
+import Drops       from './pages/Drops'
+import Proxies     from './pages/Proxies'
+import Settings    from './pages/Settings'
 
 const PAGES = {
   dashboard:  Dashboard,
@@ -18,7 +19,8 @@ const PAGES = {
 }
 
 export default function App() {
-  const [page, setPage] = useState('dashboard')
+  const [page, setPage]       = useState('dashboard')
+  const [setupDone, setSetupDone] = useState(false)
   const Page = PAGES[page] || Dashboard
 
   return (
@@ -30,6 +32,7 @@ export default function App() {
           <Page />
         </main>
       </div>
+      {!setupDone && <SetupModal onDone={() => setSetupDone(true)} />}
     </div>
   )
 }

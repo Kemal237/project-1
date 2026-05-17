@@ -3,11 +3,10 @@ import accountManager from './AccountManager'
 
 class WorkerManager {
   constructor() {
-    this.workers     = new Map() // accountId (number) → SteamWorker
+    this.workers     = new Map()
     this.webContents = null
   }
 
-  // Call once in main/index.js after createWindow(), passing win.webContents
   init(webContents) {
     this.webContents = webContents
   }
@@ -20,7 +19,6 @@ class WorkerManager {
     worker.on('statusChange', (payload) => {
       accountManager.update(payload.accountId, { status: payload.status })
       this.webContents?.send('worker:statusChange', payload)
-      // Auto-remove dead workers from Map so they can be restarted
       if (payload.status === 'error' || payload.status === 'no_prime') {
         this.workers.delete(accountId)
       }
@@ -35,8 +33,17 @@ class WorkerManager {
     })
 
     worker.on('steamGuard', (payload) => {
-      console.log('[WorkerManager] steamGuard event received:', payload)
+      console.log('[WorkerManager] steamGuard:', payload.accountId)
       this.webContents?.send('worker:steamGuard', payload)
+    })
+
+    worker.on('drop', (payload) => {
+      console.log('[WorkerManager] drop:', payload.accountId, payload.item?.name)
+      this.webContents?.send('worker:drop', payload)
+    })
+
+    worker.on('xpUpdate', (payload) => {
+      this.webContents?.send('worker:xpUpdate', payload)
     })
 
     this.workers.set(accountId, worker)

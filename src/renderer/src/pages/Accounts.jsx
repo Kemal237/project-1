@@ -1,9 +1,14 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Upload, Trash2, RefreshCw, Shield, ShieldOff, Search, Play, Square, AlertTriangle } from 'lucide-react'
+import { Plus, Upload, Trash2, RefreshCw, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight } from 'lucide-react'
 
 const STATUS_BADGE = {
   online:         'badge-green',
   farming:        'badge-green',
+  lobby:          'badge-blue',
+  cs2_launching:  'badge-yellow',
+  cs2_searching:  'badge-yellow',
+  cs2_loading:    'badge-yellow',
+  cs2_match:      'badge-green',
   connecting:     'badge-yellow',
   reconnecting:   'badge-yellow',
   idle:           'badge-gray',
@@ -17,6 +22,11 @@ const STATUS_BADGE = {
 const STATUS_LABEL = {
   online:         'Онлайн',
   farming:        'Фармит',
+  lobby:          'В лобби',
+  cs2_launching:  'Запуск Steam',
+  cs2_searching:  'Ищет матч',
+  cs2_loading:    'Загрузка...',
+  cs2_match:      'В матче',
   connecting:     'Подключение...',
   reconnecting:   'Реконнект...',
   idle:           'Офлайн',
@@ -26,6 +36,8 @@ const STATUS_LABEL = {
   warmup:         'Прогрев',
   awaiting_guard: 'Введи код',
 }
+
+const CS2_STATUSES = new Set(['farming', 'lobby', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match'])
 
 const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard'])
 
@@ -82,7 +94,7 @@ function SteamGuardModal({ request, onSubmit, onClose }) {
           <p className="mt-1 text-text-muted">
             {request.domain
               ? `Введи код из письма на ${request.domain}`
-              : 'Открой Steam на телефоне и введи код аутентификатора'}
+              : 'Введи код из мобильного аутентификатора Steam'}
           </p>
         </div>
         {request.lastCodeWrong && (
@@ -99,11 +111,21 @@ function SteamGuardModal({ request, onSubmit, onClose }) {
           maxLength={7}
           autoFocus
         />
-        <div className="flex gap-2 justify-end">
-          <button className="btn-ghost" onClick={onClose}>Скрыть</button>
-          <button className="btn-primary" onClick={submit} disabled={!code.trim()}>
-            Подтвердить
-          </button>
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2 justify-end">
+            <button className="btn-ghost" onClick={onClose}>Скрыть</button>
+            <button className="btn-primary" onClick={submit} disabled={!code.trim()}>
+              Подтвердить
+            </button>
+          </div>
+          {request.isSandbox && (
+            <button
+              className="btn-ghost text-xs text-text-muted w-full justify-center"
+              onClick={() => onSubmit(request.accountId, null)}
+            >
+              ✓ Уже подтвердил на телефоне (mobile push)
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -167,6 +189,79 @@ function AddAccountModal({ proxies, onSave, onClose }) {
   )
 }
 
+function EditAccountModal({ account, proxies, onSave, onClose }) {
+  const [form, setForm] = useState({
+    login:          account.login          || '',
+    password:       '',
+    sharedSecret:   '',
+    identitySecret: '',
+    proxyId:        account.proxyId != null ? String(account.proxyId) : '',
+    notes:          account.notes          || '',
+  })
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const save = async () => {
+    if (!form.login) return
+    const patch = {
+      login:   form.login,
+      proxyId: form.proxyId || null,
+      notes:   form.notes,
+    }
+    if (form.password)       patch.password       = form.password
+    if (form.sharedSecret)   patch.sharedSecret   = form.sharedSecret
+    if (form.identitySecret) patch.identitySecret = form.identitySecret
+    await window.api.accounts.update(account.id, patch)
+    onSave()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-bg-card border border-border rounded-xl w-[440px] p-6" onClick={e => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-text-primary mb-1">Редактировать аккаунт</h2>
+        <p className="text-xs text-text-muted mb-5 font-mono">{account.login}</p>
+        <div className="space-y-3">
+          <div>
+            <label className="label">Логин *</label>
+            <input className="input" value={form.login} onChange={e => set('login', e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Новый пароль <span className="text-text-muted">(оставь пустым чтобы не менять)</span></label>
+            <input className="input" type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Shared Secret</label>
+              <input className="input font-mono text-xs" value={form.sharedSecret} onChange={e => set('sharedSecret', e.target.value)} placeholder="Оставь пустым" />
+            </div>
+            <div>
+              <label className="label">Identity Secret</label>
+              <input className="input font-mono text-xs" value={form.identitySecret} onChange={e => set('identitySecret', e.target.value)} placeholder="Оставь пустым" />
+            </div>
+          </div>
+          <div>
+            <label className="label">Прокси</label>
+            <select className="input" value={form.proxyId} onChange={e => set('proxyId', e.target.value)}>
+              <option value="">Без прокси</option>
+              {proxies.map(p => (
+                <option key={p.id} value={p.id}>{p.host}:{p.port}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Заметки</label>
+            <input className="input" value={form.notes} onChange={e => set('notes', e.target.value)} placeholder="Необязательно" />
+          </div>
+        </div>
+        <div className="flex gap-2 mt-5 justify-end">
+          <button className="btn-ghost" onClick={onClose}>Отмена</button>
+          <button className="btn-primary" onClick={save}>Сохранить</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ImportModal({ onSave, onClose }) {
   const [text, setText] = useState('')
   const [result, setResult] = useState(null)
@@ -211,9 +306,11 @@ export default function Accounts() {
   const [selected, setSelected]             = useState(new Set())
   const [workerStatuses, setWorkerStatuses] = useState({})
   const [steamGuardRequest, setSteamGuardRequest] = useState(null)
+  const [dropToast, setDropToast] = useState(null)
   const [isRefreshing, setIsRefreshing]   = useState(false)
   const [isStartingAll, setIsStartingAll] = useState(false)
   const [isStoppingAll, setIsStoppingAll] = useState(false)
+  const [editId, setEditId]               = useState(null)
 
   const load = useCallback(async () => {
     setIsRefreshing(true)
@@ -225,7 +322,6 @@ export default function Accounts() {
 
   useEffect(() => {
     load()
-
     window.api.farm.statuses().then(s => setWorkerStatuses(s || {}))
 
     window.api.farm.onStatus(({ accountId, status, message }) => {
@@ -243,7 +339,14 @@ export default function Accounts() {
       document.title = '🔔 Введи Steam Guard код!'
       setTimeout(() => { document.title = prevTitle }, 5000)
     })
-
+    window.api.farm.onDrop(({ accountId, item }) => {
+      const acc = accounts.find(a => a.id === accountId)
+      setDropToast({ login: acc?.login ?? `#${accountId}`, itemName: item.name })
+      setTimeout(() => setDropToast(null), 4000)
+    })
+    window.api.farm.onXpUpdate(({ accountId, xp, level }) => {
+      setAccounts(prev => prev.map(a => a.id === accountId ? { ...a, xpProgress: xp, playerLevel: level } : a))
+    })
     return () => window.api.farm.offAll()
   }, [load])
 
@@ -251,6 +354,8 @@ export default function Accounts() {
     const ws = workerStatuses[account.id]
     return ws ? ws.status : account.status
   }
+
+  const getMessage = (account) => workerStatuses[account.id]?.message ?? null
 
   const isActive = (account) => ACTIVE_STATUSES.has(getStatus(account))
 
@@ -373,11 +478,21 @@ export default function Accounts() {
         />
       </div>
 
-      <div className="card p-0 overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="card p-0 overflow-visible">
+        <table className="w-full text-sm table-fixed">
+          <colgroup>
+            <col className="w-8" />
+            <col className="w-40" />
+            <col className="w-48" />
+            <col className="w-20" />
+            <col className="w-20" />
+            <col className="w-52" />
+            <col />
+            <col className="w-44" />
+          </colgroup>
           <thead>
             <tr className="border-b border-border text-text-muted text-xs">
-              <th className="px-4 py-3 text-left w-8">
+              <th className="px-4 py-3 text-left">
                 <input
                   type="checkbox"
                   onChange={e => setSelected(e.target.checked ? new Set(filtered.map(a => a.id)) : new Set())}
@@ -386,13 +501,11 @@ export default function Accounts() {
               </th>
               <th className="px-4 py-3 text-left">Логин</th>
               <th className="px-4 py-3 text-left">Статус</th>
-              <th className="px-4 py-3 text-left">Prime</th>
+              <th className="px-4 py-3 text-center">Prime</th>
+              <th className="px-4 py-3 text-center">2FA</th>
               <th className="px-4 py-3 text-left">Прокси</th>
               <th className="px-4 py-3 text-right">XP</th>
-              <th className="px-4 py-3 text-right">Дропов / неделя</th>
-              <th className="px-4 py-3 text-right">Всего дропов</th>
-              <th className="px-4 py-3 text-right">Последний дроп</th>
-              <th className="px-4 py-3 text-right w-24"></th>
+              <th className="px-4 py-3 text-right"></th>
             </tr>
           </thead>
           <tbody>
@@ -400,6 +513,7 @@ export default function Accounts() {
               const status  = getStatus(a)
               const active  = ACTIVE_STATUSES.has(status)
               const noPrime = status === 'no_prime'
+              const msg     = getMessage(a)
               return (
                 <tr key={a.id} className="border-b border-border/50 hover:bg-bg-hover/50 transition-colors">
                   <td className="px-4 py-3">
@@ -407,60 +521,83 @@ export default function Accounts() {
                   </td>
                   <td className="px-4 py-3 font-mono text-text-primary">{a.login}</td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <span className={STATUS_BADGE[status] || 'badge-gray'}>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`${STATUS_BADGE[status] || 'badge-gray'} cursor-default`}>
                         {STATUS_LABEL[status] || status}
                       </span>
-                      {status === 'error' && workerStatuses[a.id]?.message && (
-                        <AlertTriangle
-                          size={13}
-                          title={workerStatuses[a.id].message}
-                          className="text-red-400 cursor-help shrink-0"
-                        />
+                      {msg && (
+                        <div className="relative group/msg">
+                          <span className="text-text-muted cursor-help text-xs select-none">ⓘ</span>
+                          <div className="absolute left-0 top-full mt-1 z-50 hidden group-hover/msg:block bg-gray-900 border border-border rounded-md px-2.5 py-1.5 text-xs text-text-secondary shadow-xl pointer-events-none max-w-[300px] break-words whitespace-normal min-w-[160px]">
+                            {msg}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="relative group inline-flex">
-                      {a.isPrime
-                        ? <Shield size={14} className="text-yellow-400" />
-                        : <ShieldOff size={14} className="text-text-muted" />}
+                  <td className="px-4 py-3 text-center">
+                    <div className="relative group inline-flex items-center justify-center">
+                      {!a.lastLoginAt
+                        ? <Shield size={16} className="text-text-muted" />
+                        : a.isPrime
+                          ? <ShieldCheck size={16} className="text-blue-400" />
+                          : <ShieldOff size={16} className="text-red-400" />}
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-xs bg-gray-900 text-white rounded border border-border whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none z-50">
-                        {a.isPrime ? 'Прайм есть' : 'Прайм нету'}
+                        {!a.lastLoginAt ? 'Prime неизвестен' : a.isPrime ? 'Prime статус активен' : 'Prime отсутствует'}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <div className="inline-flex items-center justify-center gap-1.5">
+                      <div className="relative group/sg">
+                        <Smartphone size={15} className={a.hasSharedSecret ? 'text-green-400' : 'text-text-muted opacity-40'} />
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-xs bg-gray-900 text-white rounded border border-border whitespace-nowrap opacity-0 group-hover/sg:opacity-100 transition-opacity duration-150 pointer-events-none z-50">
+                          {a.hasSharedSecret ? 'Мобильный аутентификатор подключён' : 'Mafile не добавлен'}
+                        </div>
+                      </div>
+                      <div className="relative group/id">
+                        <ArrowLeftRight size={15} className={a.hasIdentitySecret ? 'text-green-400' : 'text-text-muted opacity-40'} />
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-xs bg-gray-900 text-white rounded border border-border whitespace-nowrap opacity-0 group-hover/id:opacity-100 transition-opacity duration-150 pointer-events-none z-50">
+                          {a.hasIdentitySecret ? 'Trade подключён' : 'Identity secret не добавлен'}
+                        </div>
                       </div>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-text-secondary font-mono text-xs">
-                    {a.proxy ? `${a.proxy.host}:${a.proxy.port}` : <span className="text-text-muted">—</span>}
+                    {a.proxy ? (
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${a.proxy.isValid ? 'bg-green-400' : 'bg-red-400'}`} />
+                        {a.proxy.host}:{a.proxy.port}
+                      </div>
+                    ) : <span className="text-text-muted">—</span>}
                   </td>
                   <td className="px-4 py-3 text-right text-text-secondary">
                     <div className="flex items-center justify-end gap-2">
+                      {a.playerLevel != null && (
+                        <span className="text-xs font-medium text-blue-400">Ур.{a.playerLevel}</span>
+                      )}
                       <div className="w-16 h-1.5 bg-bg-hover rounded-full overflow-hidden">
                         <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min((a.xpProgress / 5000) * 100, 100)}%` }} />
                       </div>
                       <span className="text-xs text-text-muted w-12 text-right">{a.xpProgress}/5000</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-right font-medium text-green-400">{a.dropsThisWeek}</td>
-                  <td className="px-4 py-3 text-right text-text-secondary">{a.dropsTotal}</td>
-                  <td className="px-4 py-3 text-right text-text-muted text-xs">
-                    {a.lastDropAt ? new Date(a.lastDropAt).toLocaleDateString('ru') : '—'}
-                  </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
                       {!noPrime && (
                         active
-                          ? <button className="btn-ghost p-1.5" title="Остановить" onClick={() => handleStop(a.id)}>
+                          ? <button className="btn-ghost p-1.5" title="Отключить" onClick={() => handleStop(a.id)}>
                               <Square size={13} className="text-red-400" />
                             </button>
-                          : <button className="btn-ghost p-1.5" title="Запустить" onClick={() => handleStart(a.id)}>
+                          : <button className="btn-ghost p-1.5" title="Подключить" onClick={() => handleStart(a.id)}>
                               <Play size={13} className="text-green-400" />
                             </button>
                       )}
-                      <button
-                        className="btn-ghost p-1.5"
-                        onClick={async () => { await window.api.accounts.delete(a.id); load() }}
-                      >
+                      <button className="btn-ghost p-1.5" title="Редактировать" onClick={() => setEditId(a.id)}>
+                        <Pencil size={13} className="text-text-muted" />
+                      </button>
+                      <button className="btn-ghost p-1.5" title="Удалить"
+                        onClick={async () => { await window.api.accounts.delete(a.id); load() }}>
                         <Trash2 size={13} />
                       </button>
                     </div>
@@ -470,7 +607,7 @@ export default function Accounts() {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-4 py-12 text-center text-text-muted">
+                <td colSpan={8} className="px-4 py-12 text-center text-text-muted">
                   {search ? 'Ничего не найдено' : 'Аккаунтов нет. Добавьте первый.'}
                 </td>
               </tr>
@@ -481,6 +618,7 @@ export default function Accounts() {
 
       {modal === 'add'    && <AddAccountModal proxies={proxies} onSave={() => { load(); setModal(null) }} onClose={() => setModal(null)} />}
       {modal === 'import' && <ImportModal onSave={load} onClose={() => setModal(null)} />}
+      {editId && <EditAccountModal account={accounts.find(a => a.id === editId)} proxies={proxies} onSave={() => { load(); setEditId(null) }} onClose={() => setEditId(null)} />}
       {steamGuardRequest && (
         <SteamGuardModal
           request={{
@@ -490,6 +628,15 @@ export default function Accounts() {
           onSubmit={handleSteamGuardSubmit}
           onClose={handleSteamGuardClose}
         />
+      )}
+      {dropToast && (
+        <div className="fixed bottom-6 right-6 bg-bg-card border border-green-500/40 rounded-xl px-4 py-3 shadow-xl z-50 flex items-center gap-3">
+          <Package size={16} className="text-green-400 shrink-0" />
+          <div>
+            <p className="text-xs text-text-muted">{dropToast.login}</p>
+            <p className="text-sm font-medium text-green-400">Дроп получен: {dropToast.itemName}</p>
+          </div>
+        </div>
       )}
     </div>
   )

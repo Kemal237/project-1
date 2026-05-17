@@ -1,1 +1,5 @@
 node_modules
+.vscode
+out/
+dist/
+.claude/

@@ -3,9 +3,24 @@ import SteamUser from 'steam-user'
 import { login, FATAL_ERESULTS } from './SteamAuth'
 import accountManager from './AccountManager'
 import proxyManager from './ProxyManager'
+import { CS2GCClient } from './CS2GCClient'
 
 const PRIME_PACKAGE_ID = 54029
 const BACKOFF_MS = [5_000, 10_000, 20_000, 40_000, 80_000]
+
+const ERESULT_MESSAGES = {
+  [SteamUser.EResult.Banned]:                          'Аккаунт заблокирован Valve',
+  [SteamUser.EResult.InvalidPassword]:                 'Неверный логин или пароль',
+  [SteamUser.EResult.RateLimitExceeded]:               'Слишком много попыток входа — подождите',
+  [SteamUser.EResult.AccountLoginDeniedNeedTwoFactor]: 'Требуется код двухфакторной аутентификации',
+  [SteamUser.EResult.AccountDisabled]:                 'Аккаунт отключён Valve',
+}
+
+function friendlyError(eresult, message) {
+  if (ERESULT_MESSAGES[eresult]) return ERESULT_MESSAGES[eresult]
+  if (message?.toLowerCase().includes('socket')) return 'Соединение разорвано — проверьте прокси'
+  return message || 'Неизвестная ошибка'
+}
 
 export class SteamWorker extends EventEmitter {
   constructor(accountId) {
@@ -16,6 +31,7 @@ export class SteamWorker extends EventEmitter {
     this._retries  = 0
     this._stopped  = false
     this._steamGuardCallback = null
+    this._gc = null
   }
 
   async start() {
@@ -27,6 +43,8 @@ export class SteamWorker extends EventEmitter {
   stop() {
     this._stopped = true
     this._steamGuardCallback = null
+    this._gc?.destroy()
+    this._gc = null
     if (this.client) {
       this.client.logOff()
       this.client.removeAllListeners()
@@ -64,9 +82,8 @@ export class SteamWorker extends EventEmitter {
       if (this._stopped) return
       console.log(`[SteamWorker ${this.accountId}] login error — eresult:${err.eresult} code:${err.code} msg:${err.message}`)
       if (FATAL_ERESULTS.has(err.eresult)) {
-        return this._fatal(err.code || 'ERR_FATAL', err.message)
+        return this._fatal(err.code || 'ERR_FATAL', friendlyError(err.eresult, err.message))
       }
-      // Таймаут ожидания Steam Guard — не реконнектиться, показать ошибку
       if (err.code === 'ERR_LOGIN_TIMEOUT' && this._steamGuardCallback) {
         this._steamGuardCallback = null
         return this._fatal('ERR_STEAM_GUARD_TIMEOUT', 'Время ввода кода Steam Guard истекло (10 мин)')
@@ -89,9 +106,14 @@ export class SteamWorker extends EventEmitter {
       return
     }
 
+    this._gc = new CS2GCClient(client, this.accountId)
+    this._gc.on('drop',      (item)           => this.emit('drop',      { accountId: this.accountId, item }))
+    this._gc.on('xpUpdate',  ({ xp, level })  => this.emit('xpUpdate',  { accountId: this.accountId, xp, level }))
+    this._gc.connect()
+
     client.setPersona(SteamUser.EPersonaState.Online)
     client.gamesPlayed([730])
-    console.log(`[SteamWorker ${accountId}] gamesPlayed(730) called, hasPrime: ${hasPrime}`)
+    console.log(`[SteamWorker ${accountId}] gamesPlayed(730), hasPrime: ${hasPrime}`)
     this._setStatus('online')
   }
 
@@ -101,20 +123,24 @@ export class SteamWorker extends EventEmitter {
     client.on('loggedOff', (eresult) => {
       if (this._stopped) return
       console.log(`[SteamWorker ${this.accountId}] loggedOff eresult:${eresult}`)
+      this._gc?.destroy()
+      this._gc = null
       client.removeAllListeners()
       this.client = null
       FATAL_ERESULTS.has(eresult)
-        ? this._fatal('ERR_LOGGED_OFF', `Steam отключил (EResult: ${eresult})`)
+        ? this._fatal('ERR_LOGGED_OFF', friendlyError(eresult, `Steam отключил (EResult: ${eresult})`))
         : this._retry()
     })
 
     client.on('error', (err) => {
       if (this._stopped) return
       console.log(`[SteamWorker ${this.accountId}] client error — eresult:${err.eresult} msg:${err.message}`)
+      this._gc?.destroy()
+      this._gc = null
       client.removeAllListeners()
       this.client = null
       FATAL_ERESULTS.has(err.eresult)
-        ? this._fatal(err.code || 'ERR_UNKNOWN', err.message)
+        ? this._fatal(err.code || 'ERR_UNKNOWN', friendlyError(err.eresult, err.message))
         : this._retry()
     })
   }

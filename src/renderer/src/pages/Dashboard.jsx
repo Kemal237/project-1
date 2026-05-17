@@ -33,7 +33,7 @@ const CustomTooltip = ({ active, payload, label }) => {
   )
 }
 
-const ACTIVE_STATUSES = new Set(['online', 'farming', 'connecting', 'reconnecting', 'awaiting_guard'])
+const ACTIVE_STATUSES = new Set(['online', 'farming', 'lobby', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'connecting', 'reconnecting', 'awaiting_guard'])
 
 export default function Dashboard() {
   const [stats, setStats]       = useState(null)
@@ -100,17 +100,23 @@ export default function Dashboard() {
           <p className="text-sm font-medium text-text-primary mb-3">Статус аккаунтов</p>
           <div className="space-y-2">
             {[
-              { label: 'Онлайн',        key: 'online',        cls: 'badge-green'  },
-              { label: 'Фармит',        key: 'farming',       cls: 'badge-green'  },
-              { label: 'Подключение',   key: 'connecting',    cls: 'badge-yellow' },
-              { label: 'Реконнект',     key: 'reconnecting',  cls: 'badge-yellow' },
-              { label: 'Ввод кода',     key: 'awaiting_guard',cls: 'badge-yellow' },
-              { label: 'Офлайн',        key: 'idle',          cls: 'badge-gray'   },
-              { label: 'Нет Prime',     key: 'no_prime',      cls: 'badge-orange' },
-              { label: 'Ошибка',        key: 'error',         cls: 'badge-red'    },
-              { label: 'Забанен',       key: 'banned',        cls: 'badge-red'    },
+              { label: 'Онлайн',        key: 'online',         cls: 'badge-green'  },
+              { label: 'Фармит',        key: 'farming',        cls: 'badge-green'  },
+              { label: 'В лобби',       key: 'lobby',          cls: 'badge-blue'   },
+              { label: 'В матче',       key: 'cs2_match',      cls: 'badge-green'  },
+              { label: 'Запуск Steam',  key: 'cs2_launching',  cls: 'badge-yellow' },
+              { label: 'Ищет матч',     key: 'cs2_searching',  cls: 'badge-yellow' },
+              { label: 'Загрузка...',   key: 'cs2_loading',    cls: 'badge-yellow' },
+              { label: 'Подключение',   key: 'connecting',     cls: 'badge-yellow' },
+              { label: 'Реконнект',     key: 'reconnecting',   cls: 'badge-yellow' },
+              { label: 'Ввод кода',     key: 'awaiting_guard', cls: 'badge-yellow' },
+              { label: 'Офлайн',        key: 'idle',           cls: 'badge-gray'   },
+              { label: 'Нет Prime',     key: 'no_prime',       cls: 'badge-orange' },
+              { label: 'Ошибка',        key: 'error',          cls: 'badge-red'    },
+              { label: 'Забанен',       key: 'banned',         cls: 'badge-red'    },
             ].map(({ label, key, cls }) => {
               const count = accounts.filter(a => getStatus(a) === key).length
+              if (count === 0) return null
               return (
                 <div key={key} className="flex items-center justify-between">
                   <span className="text-text-secondary text-sm">{label}</span>

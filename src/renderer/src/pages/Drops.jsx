@@ -2,16 +2,27 @@ import { useEffect, useState } from 'react'
 import { Package, RefreshCw } from 'lucide-react'
 
 export default function Drops() {
-  const [drops, setDrops] = useState([])
-  const [stats, setStats] = useState(null)
+  const [drops, setDrops]       = useState([])
+  const [stats, setStats]       = useState(null)
+  const [accounts, setAccounts] = useState([])
 
   const load = async () => {
-    const [d, s] = await Promise.all([window.api.drops.getAll(), window.api.drops.getStats()])
+    const [d, s, a] = await Promise.all([
+      window.api.drops.getAll(),
+      window.api.drops.getStats(),
+      window.api.accounts.getAll(),
+    ])
     setDrops(d)
     setStats(s)
+    setAccounts(a)
   }
 
   useEffect(() => { load() }, [])
+
+  // Sort accounts by total drops desc, then by login
+  const sortedAccounts = [...accounts].sort((a, b) =>
+    (b.dropsTotal || 0) - (a.dropsTotal || 0) || a.login.localeCompare(b.login)
+  )
 
   return (
     <div className="space-y-4">
@@ -25,7 +36,7 @@ export default function Drops() {
         <button className="btn-ghost" onClick={load}><RefreshCw size={14} /></button>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-2">
+      <div className="grid grid-cols-2 gap-4">
         <div className="card">
           <p className="text-text-muted text-xs mb-1">За эту неделю</p>
           <p className="text-2xl font-bold text-green-400">{stats?.thisWeek?.count || 0}</p>
@@ -39,6 +50,44 @@ export default function Drops() {
       </div>
 
       <div className="card p-0 overflow-hidden">
+        <div className="px-4 py-3 border-b border-border">
+          <p className="text-sm font-medium text-text-primary">Статистика по аккаунтам</p>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-text-muted text-xs">
+              <th className="px-4 py-3 text-left">Логин</th>
+              <th className="px-4 py-3 text-right">За неделю</th>
+              <th className="px-4 py-3 text-right">Всего</th>
+              <th className="px-4 py-3 text-right">Последний дроп</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedAccounts.map(a => (
+              <tr key={a.id} className="border-b border-border/50 hover:bg-bg-hover/50 transition-colors">
+                <td className="px-4 py-3 font-mono text-text-primary">{a.login}</td>
+                <td className="px-4 py-3 text-right font-medium text-green-400">{a.dropsThisWeek || 0}</td>
+                <td className="px-4 py-3 text-right text-text-secondary">{a.dropsTotal || 0}</td>
+                <td className="px-4 py-3 text-right text-text-muted text-xs">
+                  {a.lastDropAt ? new Date(a.lastDropAt).toLocaleString('ru') : '—'}
+                </td>
+              </tr>
+            ))}
+            {sortedAccounts.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-4 py-8 text-center text-text-muted">
+                  Аккаунтов нет
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 py-3 border-b border-border">
+          <p className="text-sm font-medium text-text-primary">История дропов</p>
+        </div>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-text-muted text-xs">

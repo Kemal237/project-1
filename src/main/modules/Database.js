@@ -5,6 +5,13 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { hostname, platform, arch } from 'os'
 import { app } from 'electron'
 
+function sqlWasmPath(file) {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'sql.js', 'dist', file)
+  }
+  return join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', file)
+}
+
 class Database {
   constructor() {
     this._key   = this._deriveKey()
@@ -14,7 +21,7 @@ class Database {
 
   async init() {
     this._dbPath = join(app.getPath('userData'), 'farm.db')
-    const SQL = await initSqlJs()
+    const SQL = await initSqlJs({ locateFile: sqlWasmPath })
 
     this.db = existsSync(this._dbPath)
       ? new SQL.Database(readFileSync(this._dbPath))
@@ -135,6 +142,28 @@ class Database {
       license_key: '', license_status: 'inactive',
     }
     for (const [k, v] of Object.entries(defaults))
+      this.db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [k, v])
+
+    // Phase 3B-1: Windows User Accounts isolation — one-shot migration
+    const migrated = this.get("SELECT value FROM settings WHERE key='migrated_to_user_accounts'")
+    if (!migrated) {
+      // Wipe старых данных (пользователь дал согласие при переходе на User Accounts)
+      this.db.run('DELETE FROM accounts')
+      this.db.run('DELETE FROM drops')
+      this.db.run('DROP TABLE IF EXISTS launcher_slots')
+      this.db.run("DELETE FROM settings WHERE key='sandboxie_path'")
+      this.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('migrated_to_user_accounts', 'true')")
+    }
+
+    // Добавить колонки для Windows User Account (идемпотентно)
+    const cols = this.all('PRAGMA table_info(accounts)').map(c => c.name)
+    if (!cols.includes('windows_user'))
+      this.db.run('ALTER TABLE accounts ADD COLUMN windows_user TEXT')
+    if (!cols.includes('windows_password_enc'))
+      this.db.run('ALTER TABLE accounts ADD COLUMN windows_password_enc TEXT')
+
+    const launcherDefaults = { steam_path: '', cs2_path: '' }
+    for (const [k, v] of Object.entries(launcherDefaults))
       this.db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [k, v])
 
     this._save()

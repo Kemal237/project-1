@@ -1,4 +1,0 @@
-electron in builtins: false
-builtins with e: electron/js2c/browser_init,electron/js2c/isolated_bundle,electron/js2c/node_init,electron/js2c/renderer_init,electron/js2c/sandbox_bundle,electron/js2c/utility_init,electron/js2c/worker_init,events
-electron in cache: false
-process.type: undefined
