@@ -2,12 +2,13 @@
   "name": "cs2-farm-panel",
   "version": "1.0.0",
   "description": "CS2 Case Farm Panel",
+  "author": "Kemal237",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "chcp 65001 && electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "dist": "npm run build && electron-builder --win",
+    "dist": "npm run build && electron-builder --win --dir",
     "release": "npm run build && electron-builder --win --publish always"
   },
   "build": {
