@@ -1,6 +1,6 @@
 {
   "name": "cs2-farm-panel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CS2 Case Farm Panel",
   "author": "Kemal237",
   "main": "out/main/index.js",
@@ -30,7 +30,9 @@
     "win": {
       "target": {
         "target": "nsis",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       }
     },
     "nsis": {
