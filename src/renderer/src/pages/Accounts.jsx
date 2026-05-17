@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Upload, Trash2, RefreshCw, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight } from 'lucide-react'
+import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight } from 'lucide-react'
 
 const STATUS_BADGE = {
   online:         'badge-green',
@@ -314,10 +314,12 @@ export default function Accounts() {
 
   const load = useCallback(async () => {
     setIsRefreshing(true)
-    const [a, p] = await Promise.all([window.api.accounts.getAll(), window.api.proxies.getAll()])
-    setAccounts(a)
-    setProxies(p)
-    setTimeout(() => setIsRefreshing(false), 600)
+    await Promise.all([
+      window.api.accounts.getAll().then(a => setAccounts(a)),
+      window.api.proxies.getAll().then(p => setProxies(p)),
+      new Promise(r => setTimeout(r, 700)),
+    ])
+    setIsRefreshing(false)
   }, [])
 
   useEffect(() => {
@@ -460,7 +462,7 @@ export default function Accounts() {
             onClick={load}
             disabled={isRefreshing}
           >
-            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+            {isRefreshing ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
           </button>
           <button className="btn-primary transition-all active:scale-95" onClick={() => setModal('add')}>
             <Plus size={14} /> Добавить

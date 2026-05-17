@@ -11,7 +11,10 @@ function AddProxyModal({ onSave, onClose }) {
   const test = async () => {
     setTesting(true)
     setTestResult(null)
-    const r = await window.api.proxies.validate(form)
+    const [r] = await Promise.all([
+      window.api.proxies.validate(form),
+      new Promise(r => setTimeout(r, 700)),
+    ])
     setTestResult(r)
     setTesting(false)
   }
@@ -89,10 +92,13 @@ export default function Proxies() {
 
   const validateAll = async () => {
     setValidating(true)
+    const start = Date.now()
     for (const p of proxies) {
       const r = await window.api.proxies.validate({ host: p.host, port: p.port, username: p.username, type: p.type })
       setProxies(prev => prev.map(x => x.id === p.id ? { ...x, isValid: r.valid, lastIp: r.ip } : x))
     }
+    const elapsed = Date.now() - start
+    if (elapsed < 700) await new Promise(r => setTimeout(r, 700 - elapsed))
     setValidating(false)
     load()
   }

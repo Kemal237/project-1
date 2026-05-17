@@ -1,20 +1,24 @@
 import { useEffect, useState } from 'react'
-import { Package, RefreshCw } from 'lucide-react'
+import { Package, RefreshCw, Loader } from 'lucide-react'
 
 export default function Drops() {
-  const [drops, setDrops]       = useState([])
-  const [stats, setStats]       = useState(null)
-  const [accounts, setAccounts] = useState([])
+  const [drops, setDrops]         = useState([])
+  const [stats, setStats]         = useState(null)
+  const [accounts, setAccounts]   = useState([])
+  const [refreshing, setRefreshing] = useState(false)
 
   const load = async () => {
+    setRefreshing(true)
     const [d, s, a] = await Promise.all([
       window.api.drops.getAll(),
       window.api.drops.getStats(),
       window.api.accounts.getAll(),
+      new Promise(r => setTimeout(r, 700)),
     ])
     setDrops(d)
     setStats(s)
     setAccounts(a)
+    setRefreshing(false)
   }
 
   useEffect(() => { load() }, [])
@@ -33,7 +37,9 @@ export default function Drops() {
             Всего: {stats?.total?.count || 0} · Доход: ${stats?.total?.revenue?.toFixed(2) || '0.00'}
           </p>
         </div>
-        <button className="btn-ghost" onClick={load}><RefreshCw size={14} /></button>
+        <button className="btn-ghost" onClick={load} disabled={refreshing}>
+          {refreshing ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+        </button>
       </div>
 
       <div className="grid grid-cols-2 gap-4">

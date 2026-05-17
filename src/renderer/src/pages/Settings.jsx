@@ -36,15 +36,14 @@ function UpdaterSection() {
           <p className="text-xs text-text-muted font-mono">v{version || '—'}</p>
         </div>
         <div className="flex items-center gap-2">
-          {(phase === 'idle' || phase === 'upToDate' || phase === 'available' || phase === 'ready') && (
-            <button className="btn-ghost" onClick={check}>
-              <RefreshCw size={13} className={phase === 'checking' ? 'animate-spin' : ''} />
-              {phase === 'idle' ? 'Проверить' : 'Проверить снова'}
-            </button>
-          )}
-          {phase === 'checking'  && (
+          {phase === 'checking' ? (
             <button className="btn-ghost" disabled>
-              <RefreshCw size={13} className="animate-spin" /> Проверка...
+              <Loader size={13} className="animate-spin" /> Проверка...
+            </button>
+          ) : (
+            <button className="btn-ghost" onClick={check}>
+              <RefreshCw size={13} />
+              {phase === 'idle' ? 'Проверить' : 'Проверить снова'}
             </button>
           )}
           {phase === 'upToDate'  && <span className="badge badge-green">Актуальная версия</span>}
@@ -148,7 +147,7 @@ function SandboxieSection() {
             <span className="badge badge-red">Не установлен</span>
           )}
           <button className="btn-ghost p-1" onClick={refresh} title="Обновить" disabled={spinning}>
-            <RefreshCw size={13} className={spinning ? 'animate-spin' : ''} />
+            {spinning ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
           </button>
         </div>
       </div>
