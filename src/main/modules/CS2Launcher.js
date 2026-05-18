@@ -10,14 +10,11 @@ const SANDBOXIE_PATHS = [
   'C:\\Program Files (x86)\\Sandboxie',
 ]
 
-const STEAM_POLL_MS      = 2000
-const STEAM_TIMEOUT_MS   = 40_000
-const READY_POLL_MS      = 3000
-const READY_TIMEOUT_MS   = 180_000 // 3 мин — учитываем первичную верификацию Steam
-const CS2_POLL_MS        = 3000
-const CS2_TIMEOUT_MS     = 120_000
+const STEAM_POLL_MS    = 2000
+const STEAM_TIMEOUT_MS = 40_000
+const CS2_POLL_MS      = 3000
+const CS2_TIMEOUT_MS   = 120_000
 
-// Minimal flags — убраны устаревшие -nosound -nojoy +cl_forcepreload
 const CS2_FLAGS = [
   '-windowed', '-w', '800', '-h', '600',
   '-novid',
@@ -27,7 +24,7 @@ const CS2_FLAGS = [
 class CS2Launcher extends EventEmitter {
   constructor() {
     super()
-    this._active = new Map() // accountId → { boxName, sbPath }
+    this._active = new Map()
   }
 
   isRunning(accountId) {
@@ -36,7 +33,7 @@ class CS2Launcher extends EventEmitter {
 
   async start(accountId, creds, onStatus) {
     if (this._active.has(accountId)) return
-    this._active.set(accountId, null) // reserve slot immediately to prevent race
+    this._active.set(accountId, null)
 
     try {
       const sbPath = this._findSandboxie()
@@ -55,20 +52,15 @@ class CS2Launcher extends EventEmitter {
       this._active.set(accountId, { boxName, sbPath, steamPath })
 
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
-      this._spawnSteam(sbPath, boxName, steamPath, [
+      this._spawnInBox(sbPath, boxName, steamPath, [
         '-login', creds.login, creds.password,
         '-silent', '-noreactlogin',
       ])
 
       await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
 
-      // Ждём steamwebhelper.exe — он появляется только когда Steam
-      // полностью загрузился, прошёл верификацию и авторизовался
-      onStatus('cs2_launching', 'Ожидание инициализации Steam...')
-      await this._waitForProcess('steamwebhelper', READY_TIMEOUT_MS, READY_POLL_MS)
-
       onStatus('cs2_launching', 'Запуск CS2...')
-      this._spawnSteam(sbPath, boxName, steamPath, [
+      this._spawnInBox(sbPath, boxName, steamPath, [
         '-applaunch', '730', ...CS2_FLAGS,
       ])
 
@@ -76,7 +68,7 @@ class CS2Launcher extends EventEmitter {
 
       onStatus('cs2_lobby', 'CS2 запущен — в лобби')
     } catch (e) {
-      this._active.delete(accountId) // rollback slot reservation on failure
+      this._active.delete(accountId)
       throw e
     }
   }
@@ -113,13 +105,9 @@ class CS2Launcher extends EventEmitter {
       try { ini = readFileSync(iniPath, 'utf8') } catch {}
     }
 
-    const boxHeader = `[${boxName}]`
-    const boxExists = ini.includes(boxHeader)
-
-    if (!boxExists) {
-      // Бокс не настроен — пробуем записать
+    if (!ini.includes(`[${boxName}]`)) {
       const entry = [
-        boxHeader,
+        `[${boxName}]`,
         'Enabled=y',
         'AutoRecover=n',
         'MsiInstallerExemptions=y',
@@ -136,30 +124,21 @@ class CS2Launcher extends EventEmitter {
       } catch (e) {
         if (e.code === 'EPERM') {
           throw new Error(
-            'Sandboxie бокс не настроен. Запусти панель от имени администратора один раз ' +
-            'чтобы создать конфигурацию, после этого права администратора не понадобятся.'
+            'Sandboxie бокс не настроен. Запусти панель от имени администратора ' +
+            'один раз чтобы создать конфигурацию.'
           )
         }
         throw e
       }
     }
 
-    // Перезагружаем конфиг Sandboxie (бокс уже есть или только что создан)
     try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
   }
 
-  _spawnSteam(sbPath, boxName, steamPath, args) {
+  _spawnInBox(sbPath, boxName, steamPath, args) {
     const startExe = join(sbPath, 'Start.exe')
     const steamExe = join(steamPath, 'steam.exe')
     spawn(startExe, [`/box:${boxName}`, steamExe, ...args], {
-      detached: true,
-      stdio: 'ignore',
-    }).unref()
-  }
-
-  _spawnExe(sbPath, boxName, exe, args) {
-    const startExe = join(sbPath, 'Start.exe')
-    spawn(startExe, [`/box:${boxName}`, exe, ...args], {
       detached: true,
       stdio: 'ignore',
     }).unref()
@@ -189,10 +168,7 @@ class CS2Launcher extends EventEmitter {
           }
           setTimeout(() => {
             if (done) return
-            if (isRunning()) {
-              done = true
-              return resolve()
-            }
+            if (isRunning()) { done = true; return resolve() }
             if (Date.now() > deadline) {
               done = true
               return reject(new Error(`Timeout: ${name}.exe не запустился за ${timeoutMs / 1000}с`))
