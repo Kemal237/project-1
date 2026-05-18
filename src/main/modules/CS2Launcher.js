@@ -17,12 +17,13 @@ const CS2_TIMEOUT_MS     = 120_000
 const CS2_LOBBY_WAIT_MS  = 90_000  // сколько ждём после появления cs2.exe до статуса "лобби"
 
 const CS2_FLAGS = [
-  '-windowed', '-w', '800', '-h', '600',
+  '-windowed',
+  '-w', '800', '-h', '600',
+  '+r_mode_width', '800', '+r_mode_height', '600',
   '-novid',
   '+fps_max', '30',
-  '+r_dynamic', '0',       // динамическое освещение выкл
-  '+cl_detail_max_sway', '0',
-  '+mat_queue_mode', '0',  // минимальная очередь рендера
+  '+r_dynamic', '0',
+  '+mat_queue_mode', '0',
 ]
 
 class CS2Launcher extends EventEmitter {
