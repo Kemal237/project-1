@@ -135,7 +135,7 @@ function SteamGuardModal({ request, onSubmit, onClose }) {
 }
 
 function AddAccountModal({ proxies, onSave, onClose }) {
-  const [form, setForm] = useState({ login: '', password: '', sharedSecret: '', identitySecret: '', proxyId: '', notes: '' })
+  const [form, setForm] = useState({ login: '', password: '', proxyId: '', notes: '' })
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -157,16 +157,6 @@ function AddAccountModal({ proxies, onSave, onClose }) {
           <div>
             <label className="label">Пароль *</label>
             <input className="input" type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Shared Secret</label>
-              <input className="input font-mono text-xs" value={form.sharedSecret} onChange={e => set('sharedSecret', e.target.value)} placeholder="2FA Secret" />
-            </div>
-            <div>
-              <label className="label">Identity Secret</label>
-              <input className="input font-mono text-xs" value={form.identitySecret} onChange={e => set('identitySecret', e.target.value)} placeholder="Trade Secret" />
-            </div>
           </div>
           <div>
             <label className="label">Прокси</label>
@@ -193,37 +183,17 @@ function AddAccountModal({ proxies, onSave, onClose }) {
 
 function EditAccountModal({ account, proxies, onSave, onClose }) {
   const [form, setForm] = useState({
-    login:          account.login || '',
-    password:       '',
-    sharedSecret:   '',
-    identitySecret: '',
-    proxyId:        account.proxyId != null ? String(account.proxyId) : '',
-    notes:          account.notes || '',
+    login:   account.login || '',
+    password: '',
+    proxyId: account.proxyId != null ? String(account.proxyId) : '',
+    notes:   account.notes || '',
   })
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    window.api.accounts.getCredentials(account.id).then(creds => {
-      if (creds) setForm(f => ({
-        ...f,
-        sharedSecret:   creds.sharedSecret   || '',
-        identitySecret: creds.identitySecret || '',
-      }))
-      setLoading(false)
-    })
-  }, [account.id])
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const save = async () => {
     if (!form.login) return
-    const patch = {
-      login:          form.login,
-      proxyId:        form.proxyId || null,
-      notes:          form.notes,
-      sharedSecret:   form.sharedSecret,
-      identitySecret: form.identitySecret,
-    }
+    const patch = { login: form.login, proxyId: form.proxyId || null, notes: form.notes }
     if (form.password) patch.password = form.password
     await window.api.accounts.update(account.id, patch)
     onSave()
@@ -242,19 +212,11 @@ function EditAccountModal({ account, proxies, onSave, onClose }) {
             <label className="label">Пароль <span className="text-text-muted">(оставь пустым чтобы не менять)</span></label>
             <input className="input" type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Shared Secret</label>
-              <input className="input font-mono text-xs" value={form.sharedSecret}
-                onChange={e => set('sharedSecret', e.target.value)}
-                placeholder={loading ? 'Загрузка...' : '2FA Secret'} disabled={loading} />
-            </div>
-            <div>
-              <label className="label">Identity Secret</label>
-              <input className="input font-mono text-xs" value={form.identitySecret}
-                onChange={e => set('identitySecret', e.target.value)}
-                placeholder={loading ? 'Загрузка...' : 'Trade Secret'} disabled={loading} />
-            </div>
+          <div className="flex items-center gap-2 py-1">
+            <ShieldCheck size={13} className={account.hasSharedSecret ? 'text-green-400' : 'text-text-muted'} />
+            <span className="text-xs text-text-muted">
+              {account.hasSharedSecret ? 'maFile импортирован (авто-2FA активен)' : 'maFile не импортирован — используй кнопку на аккаунте'}
+            </span>
           </div>
           <div>
             <label className="label">Прокси</label>
@@ -272,7 +234,7 @@ function EditAccountModal({ account, proxies, onSave, onClose }) {
         </div>
         <div className="flex gap-2 mt-5 justify-end">
           <button className="btn-ghost" onClick={onClose}>Отмена</button>
-          <button className="btn-primary" onClick={save} disabled={loading}>Сохранить</button>
+          <button className="btn-primary" onClick={save}>Сохранить</button>
         </div>
       </div>
     </div>
