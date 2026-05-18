@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'child_process'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { EventEmitter } from 'events'
 import steamConfigPatcher from './SteamConfigPatcher'
@@ -16,10 +16,13 @@ const CS2_POLL_MS        = 3000
 const CS2_TIMEOUT_MS     = 120_000
 const CS2_LOBBY_WAIT_MS  = 90_000  // сколько ждём после появления cs2.exe до статуса "лобби"
 
+const CS2_W = '640'
+const CS2_H = '480'
+
 const CS2_FLAGS = [
   '-windowed',
-  '-w', '800', '-h', '600',
-  '+r_mode_width', '800', '+r_mode_height', '600',
+  '-w', CS2_W, '-h', CS2_H,
+  '+r_mode_width', CS2_W, '+r_mode_height', CS2_H,
   '-novid',
   '+fps_max', '30',
   '+r_dynamic', '0',
@@ -38,7 +41,6 @@ class CS2Launcher extends EventEmitter {
 
   async start(accountId, creds, onStatus) {
     if (this._active.has(accountId)) return
-    this._active.set(accountId, null)
 
     try {
       const sbPath = this._findSandboxie()
@@ -51,10 +53,10 @@ class CS2Launcher extends EventEmitter {
       if (!cs2Path) throw new Error('CS2 не найден. Убедись что игра установлена через Steam.')
 
       const boxName = `CS2Bot_${accountId}`
+      this._active.set(accountId, { boxName, sbPath, steamPath })
 
       onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
       this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
-      this._active.set(accountId, { boxName, sbPath, steamPath })
 
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
       this._spawnInBox(sbPath, boxName, steamPath, [
@@ -65,6 +67,7 @@ class CS2Launcher extends EventEmitter {
       await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
 
       onStatus('cs2_launching', 'Запуск CS2...')
+      this._patchCS2VideoSettings(cs2Path)
       this._spawnInBox(sbPath, boxName, steamPath, [
         '-applaunch', '730', ...CS2_FLAGS,
       ])
@@ -89,20 +92,56 @@ class CS2Launcher extends EventEmitter {
 
   stop(accountId) {
     const entry = this._active.get(accountId)
+    this._active.delete(accountId)
     if (!entry) return
     try {
       execSync(
         `"${join(entry.sbPath, 'Stop.exe')}" /box:${entry.boxName}`,
-        { timeout: 10_000 }
+        { timeout: 15_000 }
       )
-    } catch (e) {
-      console.log('[CS2Launcher] Stop.exe error:', e.message)
+    } catch {
+      // Stop.exe не сработал — принудительно через Start.exe /terminate
+      try {
+        execSync(
+          `"${join(entry.sbPath, 'Start.exe')}" /box:${entry.boxName} /terminate`,
+          { timeout: 10_000 }
+        )
+      } catch (e2) {
+        console.log('[CS2Launcher] Sandbox termination failed:', e2.message)
+      }
     }
-    this._active.delete(accountId)
   }
 
   stopAll() {
     for (const id of [...this._active.keys()]) this.stop(id)
+  }
+
+  _patchCS2VideoSettings(cs2Path) {
+    const cfgDir = join(cs2Path, 'game', 'csgo', 'cfg')
+    const videoTxt = join(cfgDir, 'video.txt')
+
+    const setKey = (content, key, value) => {
+      const re = new RegExp(`("${key.replace('.', '\\.')}"+\\s+)"[^"]*"`)
+      if (re.test(content)) return content.replace(re, `$1"${value}"`)
+      return content.replace(/(\})\s*$/, `\t"${key}"\t\t"${value}"\n$1\n`)
+    }
+
+    let content = ''
+    try { content = readFileSync(videoTxt, 'utf8') } catch {
+      content = '"Video_Settings"\n{\n}\n'
+    }
+
+    content = setKey(content, 'setting.fullscreen',        '0')
+    content = setKey(content, 'setting.defaultres',        CS2_W)
+    content = setKey(content, 'setting.defaultresheight',  CS2_H)
+    content = setKey(content, 'setting.nowindowborder',    '0')
+
+    try {
+      mkdirSync(cfgDir, { recursive: true })
+      writeFileSync(videoTxt, content, 'utf8')
+    } catch (e) {
+      console.log('[CS2Launcher] video.txt patch failed:', e.message)
+    }
   }
 
   _findSandboxie() {
