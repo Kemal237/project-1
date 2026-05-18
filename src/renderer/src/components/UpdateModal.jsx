@@ -96,15 +96,13 @@ export default function UpdateModal({ info, onDismiss }) {
           )}
           {phase === 'downloading' && (
             <button className="btn-ghost flex-1" disabled>
-              <Loader size={13} className="animate-spin" />
-              Скачивание...
+              Ожидайте...
             </button>
           )}
           {phase === 'ready' && (
             <>
               <button className="btn-primary flex-1" onClick={handleInstall}>
-                <RotateCcw size={13} />
-                Перезапустить и установить
+                Установить и перезапустить
               </button>
               <button className="btn-ghost flex-1" onClick={onDismiss}>
                 Позже
