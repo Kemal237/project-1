@@ -79,7 +79,12 @@ function UpdatesSection() {
           <p className="text-xs text-text-muted font-mono">v{version || '—'}</p>
         </div>
         <div className="flex items-center gap-2">
-          {upPhase === 'upToDate' && <span className="badge badge-green">Актуальная версия</span>}
+          {upPhase === 'upToDate' && (
+            <>
+              <CheckCircle size={13} className="text-green-400" />
+              <span className="badge badge-green">Актуальная версия</span>
+            </>
+          )}
           <button className="btn-ghost p-1" onClick={checkUpdates} disabled={spinning} title="Проверить обновления">
             {spinning ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
           </button>
