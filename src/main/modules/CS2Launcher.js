@@ -15,11 +15,11 @@ const STEAM_TIMEOUT_MS = 40_000
 const CS2_POLL_MS      = 3000
 const CS2_TIMEOUT_MS   = 120_000
 
+// Minimal flags — убраны устаревшие -nosound -nojoy +cl_forcepreload
 const CS2_FLAGS = [
-  '-w', '800', '-h', '600', '-windowed',
-  '-novid', '-nosound', '-nojoy',
+  '-windowed', '-w', '800', '-h', '600',
+  '-novid',
   '+fps_max', '30',
-  '+cl_forcepreload', '0',
 ]
 
 class CS2Launcher extends EventEmitter {
@@ -43,24 +43,29 @@ class CS2Launcher extends EventEmitter {
       const steamPath = await steamConfigPatcher.detectSteamPath()
       if (!steamPath) throw new Error('Steam не найден. Установи Steam.')
 
+      const cs2Path = await steamConfigPatcher.detectCS2Path(steamPath)
+      if (!cs2Path) throw new Error('CS2 не найден. Убедись что игра установлена через Steam.')
+
       const boxName = `CS2Bot_${accountId}`
 
       onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
-      this._configureSandboxBox(sbPath, boxName, steamPath)
-      this._active.set(accountId, { boxName, sbPath, steamPath }) // set real entry before status so stop() works
+      this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
+      this._active.set(accountId, { boxName, sbPath, steamPath })
 
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
-      this._spawnInBox(sbPath, boxName, steamPath, [
+      this._spawnSteam(sbPath, boxName, steamPath, [
         '-login', creds.login, creds.password,
         '-silent', '-noreactlogin',
       ])
 
       await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
 
+      // Даём Steam время загрузиться и авторизоваться
+      await new Promise(r => setTimeout(r, 5000))
+
       onStatus('cs2_launching', 'Запуск CS2...')
-      this._spawnInBox(sbPath, boxName, steamPath, [
-        '-applaunch', '730', ...CS2_FLAGS,
-      ])
+      const cs2Exe = join(cs2Path, 'game', 'bin', 'win64', 'cs2.exe')
+      this._spawnExe(sbPath, boxName, cs2Exe, CS2_FLAGS)
 
       await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS, 6000)
 
@@ -96,17 +101,16 @@ class CS2Launcher extends EventEmitter {
     return null
   }
 
-  _configureSandboxBox(sbPath, boxName, steamPath) {
+  _configureSandboxBox(sbPath, boxName, steamPath, cs2Path) {
     const iniPath = 'C:\\Windows\\Sandboxie.ini'
     let ini = ''
     try { ini = readFileSync(iniPath, 'utf16le') } catch {
       try { ini = readFileSync(iniPath, 'utf8') } catch {}
     }
 
-    // Always rewrite box entry to keep settings current
+    // Всегда перезаписываем секцию бокса чтобы настройки были актуальны
     const boxHeader = `[${boxName}]`
     if (ini.includes(boxHeader)) {
-      // Remove old entry (from header to next section or end of file)
       ini = ini.replace(new RegExp(`\\[${boxName}\\][^\\[]*`, 's'), '')
     }
 
@@ -115,22 +119,35 @@ class CS2Launcher extends EventEmitter {
       'Enabled=y',
       'AutoRecover=n',
       'MsiInstallerExemptions=y',
+      // Общий доступ к файлам игры (не копируются в бокс)
       `OpenFilePath=${join(steamPath, 'steamapps')}`,
+      `OpenFilePath=${join(cs2Path, 'game')}`,
+      // Реестр Steam
       'OpenKeyPath=HKLM\\Software\\Valve',
       'OpenKeyPath=HKCU\\Software\\Valve',
+      // IPC необходимые для CS2 и Steam
+      'OpenIpcPath=\\BaseNamedObjects\\*',
+      'OpenIpcPath=\\Sessions\\*\\BaseNamedObjects\\*',
       '',
     ].join('\r\n')
 
-    writeFileSync(iniPath, ini + entry, 'utf16le') // throws on failure — caller handles it
+    writeFileSync(iniPath, ini + entry, 'utf16le')
 
-    // Signal Sandboxie service to reload config (always — service may have restarted)
     try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
   }
 
-  _spawnInBox(sbPath, boxName, steamPath, args) {
+  _spawnSteam(sbPath, boxName, steamPath, args) {
     const startExe = join(sbPath, 'Start.exe')
     const steamExe = join(steamPath, 'steam.exe')
     spawn(startExe, [`/box:${boxName}`, steamExe, ...args], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref()
+  }
+
+  _spawnExe(sbPath, boxName, exe, args) {
+    const startExe = join(sbPath, 'Start.exe')
+    spawn(startExe, [`/box:${boxName}`, exe, ...args], {
       detached: true,
       stdio: 'ignore',
     }).unref()
@@ -158,14 +175,12 @@ class CS2Launcher extends EventEmitter {
             done = true
             return resolve()
           }
-          // Stability check: verify process is still alive after stabilityMs
           setTimeout(() => {
             if (done) return
             if (isRunning()) {
               done = true
               return resolve()
             }
-            // Process died — keep waiting
             if (Date.now() > deadline) {
               done = true
               return reject(new Error(`Timeout: ${name}.exe не запустился за ${timeoutMs / 1000}с`))
