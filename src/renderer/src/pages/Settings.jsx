@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw } from 'lucide-react'
+import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw, Folder, Check } from 'lucide-react'
 
 function UpdatesSection() {
   // — Updater —
@@ -146,6 +146,66 @@ function UpdatesSection() {
   )
 }
 
+function PathRow({ label, settingKey, found, onSaved }) {
+  const [value,   setValue]   = useState('')
+  const [saving,  setSaving]  = useState(false)
+  const [saved,   setSavedOk] = useState(false)
+
+  useEffect(() => {
+    window.api.settings.get().then(s => setValue(s[settingKey] || ''))
+  }, [settingKey])
+
+  const apply = async (path) => {
+    const v = path ?? value
+    setSaving(true)
+    await window.api.settings.set(settingKey, v || null)
+    await onSaved()
+    setSaving(false)
+    setSavedOk(true)
+    setTimeout(() => setSavedOk(false), 1500)
+  }
+
+  const pick = async () => {
+    const path = await window.api.dialog.openFolder()
+    if (!path) return
+    setValue(path)
+    await apply(path)
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-text-primary">{label}</p>
+        <div className="flex items-center gap-1.5">
+          {found === null && <span className="badge badge-gray">Проверка...</span>}
+          {found === true  && <><CheckCircle size={13} className="text-green-400" /><span className="badge badge-green">Найден</span></>}
+          {found === false && <span className={label === 'Steam' ? 'badge badge-red' : 'badge badge-yellow'}>Не найден</span>}
+        </div>
+      </div>
+      <div className="flex gap-1.5">
+        <input
+          className="input flex-1 text-xs font-mono"
+          placeholder={`Путь к ${label}...`}
+          value={value}
+          onChange={e => { setValue(e.target.value); setSavedOk(false) }}
+          onKeyDown={e => e.key === 'Enter' && apply()}
+        />
+        <button className="btn-ghost p-2" title="Выбрать папку" onClick={pick}>
+          <Folder size={13} />
+        </button>
+        <button
+          className={`btn-ghost p-2 ${saved ? 'text-green-400' : ''}`}
+          title="Применить"
+          onClick={() => apply()}
+          disabled={saving}
+        >
+          {saving ? <Loader size={13} className="animate-spin" /> : <Check size={13} />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function DependenciesSection() {
   const [deps,     setDeps]     = useState(null)
   const [spinning, setSpinning] = useState(false)
@@ -161,12 +221,6 @@ function DependenciesSection() {
 
   useEffect(() => { refresh() }, [])
 
-  const shortPath = (p) => {
-    if (!p) return ''
-    const parts = p.replace(/\\/g, '/').split('/')
-    return parts.length > 3 ? `...\\${parts.slice(-2).join('\\')}` : p
-  }
-
   return (
     <div className="card space-y-4">
       <div className="flex items-center justify-between border-b border-border pb-3">
@@ -178,53 +232,25 @@ function DependenciesSection() {
         </button>
       </div>
 
-      {/* Steam */}
-      <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <p className="text-sm text-text-primary">Steam</p>
-          <p className="text-xs text-text-muted font-mono">
-            {deps?.steam?.path ? shortPath(deps.steam.path) : '—'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {deps === null ? (
-            <span className="badge badge-gray">Проверка...</span>
-          ) : deps.steam.found ? (
-            <>
-              <CheckCircle size={13} className="text-green-400" />
-              <span className="badge badge-green">Найден</span>
-            </>
-          ) : (
-            <span className="badge badge-red">Не найден</span>
-          )}
-        </div>
-      </div>
+      <PathRow
+        label="Steam"
+        settingKey="steam_path"
+        found={deps === null ? null : deps.steam.found}
+        onSaved={refresh}
+      />
 
-      {/* CS2 */}
-      <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <p className="text-sm text-text-primary">Counter-Strike 2</p>
-          <p className="text-xs text-text-muted font-mono">
-            {deps?.cs2?.path ? shortPath(deps.cs2.path) : '—'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {deps === null ? (
-            <span className="badge badge-gray">Проверка...</span>
-          ) : deps.cs2.found ? (
-            <>
-              <CheckCircle size={13} className="text-green-400" />
-              <span className="badge badge-green">Найден</span>
-            </>
-          ) : (
-            <span className="badge badge-yellow">Не найден</span>
-          )}
-        </div>
-      </div>
+      <div className="border-t border-border" />
 
-      {deps && !deps.cs2.found && (
+      <PathRow
+        label="Counter-Strike 2"
+        settingKey="cs2_path"
+        found={deps === null ? null : deps.cs2.found}
+        onSaved={refresh}
+      />
+
+      {deps && !deps.cs2.found && !deps.steam.found && (
         <p className="text-xs text-text-muted">
-          CS2 не найден — убедись что игра установлена через Steam.
+          Укажи пути вручную или установи Steam и CS2, затем нажми обновить.
         </p>
       )}
     </div>
