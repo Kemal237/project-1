@@ -28,6 +28,7 @@
       "**/node_modules/sql.js/dist/*.wasm"
     ],
     "win": {
+      "requestedExecutionLevel": "requireAdministrator",
       "target": {
         "target": "nsis",
         "arch": [

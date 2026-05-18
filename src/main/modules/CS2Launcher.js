@@ -46,7 +46,7 @@ class CS2Launcher extends EventEmitter {
       const boxName = `CS2Bot_${accountId}`
 
       onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
-      this._configureSandboxBox(boxName, steamPath)
+      this._configureSandboxBox(sbPath, boxName, steamPath)
       this._active.set(accountId, { boxName, sbPath, steamPath }) // set real entry before status so stop() works
 
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
@@ -96,14 +96,18 @@ class CS2Launcher extends EventEmitter {
     return null
   }
 
-  _configureSandboxBox(boxName, steamPath) {
+  _configureSandboxBox(sbPath, boxName, steamPath) {
     const iniPath = 'C:\\Windows\\Sandboxie.ini'
     let ini = ''
     try { ini = readFileSync(iniPath, 'utf16le') } catch {
       try { ini = readFileSync(iniPath, 'utf8') } catch {}
     }
 
-    if (ini.includes(`[${boxName}]`)) return
+    if (ini.includes(`[${boxName}]`)) {
+      // Box already in INI — still reload to ensure service has it loaded
+      try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
+      return
+    }
 
     const entry = [
       `[${boxName}]`,
@@ -116,6 +120,9 @@ class CS2Launcher extends EventEmitter {
     ].join('\r\n')
 
     writeFileSync(iniPath, ini + entry, 'utf16le') // throws on failure — caller handles it
+
+    // Signal Sandboxie service to reload config so the new box is recognized
+    try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
   }
 
   _spawnInBox(sbPath, boxName, steamPath, args) {
