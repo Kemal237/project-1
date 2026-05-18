@@ -56,7 +56,7 @@ class CS2Launcher extends EventEmitter {
       this._active.set(accountId, { boxName, sbPath, steamPath })
 
       onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
-      this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
+      await this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
 
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
       this._spawnInBox(sbPath, boxName, steamPath, [
@@ -151,7 +151,7 @@ class CS2Launcher extends EventEmitter {
     return null
   }
 
-  _configureSandboxBox(sbPath, boxName, steamPath, cs2Path) {
+  async _configureSandboxBox(sbPath, boxName, steamPath, cs2Path) {
     const iniPath = 'C:\\Windows\\Sandboxie.ini'
     let ini = ''
     try { ini = readFileSync(iniPath, 'utf16le') } catch {
@@ -183,9 +183,11 @@ class CS2Launcher extends EventEmitter {
         }
         throw e
       }
-    }
 
-    try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
+      try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
+      // Ждём пока Sandboxie сервис обработает изменения в INI
+      await new Promise(r => setTimeout(r, 2000))
+    }
   }
 
   _spawnInBox(sbPath, boxName, steamPath, args) {
