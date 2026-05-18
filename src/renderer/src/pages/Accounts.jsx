@@ -136,14 +136,23 @@ function SteamGuardModal({ request, onSubmit, onClose }) {
 
 function AddAccountModal({ proxies, onSave, onClose }) {
   const [form, setForm] = useState({ login: '', password: '', proxyId: '', notes: '' })
+  const [maFilePath, setMaFilePath] = useState(null)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
+  const pickMaFile = async () => {
+    const path = await window.api.dialog.openMaFile()
+    if (path) setMaFilePath(path)
+  }
+
   const save = async () => {
     if (!form.login || !form.password) return
-    await window.api.accounts.add({ ...form, proxyId: form.proxyId || null })
+    const { id } = await window.api.accounts.add({ ...form, proxyId: form.proxyId || null })
+    if (maFilePath) await window.api.accounts.importMaFile(id, maFilePath)
     onSave()
   }
+
+  const maFileName = maFilePath ? maFilePath.split('\\').pop().split('/').pop() : null
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
@@ -157,6 +166,24 @@ function AddAccountModal({ proxies, onSave, onClose }) {
           <div>
             <label className="label">Пароль *</label>
             <input className="input" type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" />
+          </div>
+          <div>
+            <label className="label">maFile <span className="text-text-muted">(необязательно)</span></label>
+            <div className="flex gap-1.5">
+              <div className="input flex-1 text-xs font-mono text-text-muted truncate flex items-center">
+                {maFileName
+                  ? <span className="text-green-400">{maFileName}</span>
+                  : 'Не выбран'}
+              </div>
+              <button className="btn-ghost p-2" onClick={pickMaFile} title="Выбрать maFile">
+                <Smartphone size={13} />
+              </button>
+              {maFilePath && (
+                <button className="btn-ghost p-2 text-red-400" onClick={() => setMaFilePath(null)} title="Убрать">
+                  <Trash2 size={13} />
+                </button>
+              )}
+            </div>
           </div>
           <div>
             <label className="label">Прокси</label>
