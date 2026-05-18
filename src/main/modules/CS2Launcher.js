@@ -119,6 +119,7 @@ class CS2Launcher extends EventEmitter {
       'Enabled=y',
       'AutoRecover=n',
       'MsiInstallerExemptions=y',
+      'DropAdminRights=y',
       // Общий доступ к файлам игры (не копируются в бокс)
       `OpenFilePath=${join(steamPath, 'steamapps')}`,
       `OpenFilePath=${join(cs2Path, 'game')}`,
