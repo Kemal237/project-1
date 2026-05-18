@@ -78,6 +78,9 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.removeAllListeners('updater:error')
     },
   },
+  deps: {
+    detect: () => ipcRenderer.invoke('deps:detect'),
+  },
   sandboxie: {
     status:     ()    => ipcRenderer.invoke('sandboxie:status'),
     install:    ()    => ipcRenderer.invoke('sandboxie:install'),

@@ -5,8 +5,9 @@ import proxyManager      from './modules/ProxyManager'
 import settings          from './modules/Settings'
 import dropTracker       from './modules/DropTracker'
 import workerManager     from './modules/WorkerManager'
-import sandboxieManager  from './modules/SandboxieManager'
-import cs2Launcher      from './modules/CS2Launcher'
+import sandboxieManager    from './modules/SandboxieManager'
+import cs2Launcher        from './modules/CS2Launcher'
+import steamConfigPatcher from './modules/SteamConfigPatcher'
 
 export function setupIPC() {
   ipcMain.handle('accounts:getAll',    ()           => accountManager.getAll())
@@ -79,6 +80,15 @@ export function setupIPC() {
   ipcMain.handle('updater:check',     () => app.isPackaged ? autoUpdater.checkForUpdates() : null)
   ipcMain.handle('updater:download',  () => autoUpdater.downloadUpdate())
   ipcMain.handle('updater:install',   () => autoUpdater.quitAndInstall(false, true))
+
+  ipcMain.handle('deps:detect', async () => {
+    const steamPath = await steamConfigPatcher.detectSteamPath()
+    const cs2Path   = await steamConfigPatcher.detectCS2Path(steamPath)
+    return {
+      steam: { found: !!steamPath, path: steamPath },
+      cs2:   { found: !!cs2Path,   path: cs2Path   },
+    }
+  })
 
   ipcMain.handle('sandboxie:status', () => sandboxieManager.getStatus())
 

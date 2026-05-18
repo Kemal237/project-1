@@ -1,28 +1,69 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw } from 'lucide-react'
 
-function UpdaterSection() {
+function UpdatesSection() {
+  // — Updater —
   const [version,  setVersion]  = useState('')
-  const [phase,    setPhase]    = useState('idle') // idle | checking | upToDate | error
-  const [error,    setError]    = useState('')
+  const [upPhase,  setUpPhase]  = useState('idle')
+  const [upError,  setUpError]  = useState('')
   const [spinning, setSpinning] = useState(false)
+
+  // — Sandboxie —
+  const [sbStatus,   setSbStatus]   = useState(null)
+  const [sbPhase,    setSbPhase]    = useState('idle')
+  const [sbProgress, setSbProgress] = useState('')
+  const [sbError,    setSbError]    = useState('')
+  const [sbSpin,     setSbSpin]     = useState(false)
+
+  const refreshSandboxie = useCallback(() => {
+    setSbStatus(null)
+    setSbSpin(true)
+    Promise.all([
+      window.api.sandboxie.status().then(setSbStatus),
+      new Promise(r => setTimeout(r, 700)),
+    ]).finally(() => setSbSpin(false))
+  }, [])
 
   useEffect(() => {
     window.api.updater.getVersion().then(setVersion)
-    window.api.updater.onUpToDate(() => { setPhase('upToDate'); setSpinning(false) })
-    window.api.updater.onError(msg  => { setPhase('error'); setError(msg); setSpinning(false) })
-    return () => window.api.updater.offSettings()
+    window.api.updater.onUpToDate(() => { setUpPhase('upToDate'); setSpinning(false) })
+    window.api.updater.onError(msg  => { setUpPhase('error'); setUpError(msg); setSpinning(false) })
+
+    refreshSandboxie()
+    window.api.sandboxie.onProgress(msg => {
+      if (msg === '__done__') {
+        setSbPhase('done')
+        refreshSandboxie()
+      } else if (msg.startsWith('__error__:')) {
+        setSbError(msg.replace('__error__:', ''))
+        setSbPhase('error')
+      } else {
+        setSbProgress(msg)
+      }
+    })
+
+    return () => {
+      window.api.updater.offSettings()
+      window.api.sandboxie.offProgress()
+    }
   }, [])
 
-  const check = async () => {
+  const checkUpdates = async () => {
     setSpinning(true)
-    setPhase('checking')
-    setError('')
+    setUpPhase('checking')
+    setUpError('')
     await Promise.all([
       window.api.updater.check(),
       new Promise(r => setTimeout(r, 700)),
     ])
     setSpinning(false)
+  }
+
+  const installSandboxie = async () => {
+    setSbPhase('installing')
+    setSbError('')
+    setSbProgress('')
+    await window.api.sandboxie.install()
   }
 
   return (
@@ -31,131 +72,160 @@ function UpdaterSection() {
         <RotateCcw size={14} /> Обновления
       </p>
 
+      {/* App version */}
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
-          <p className="text-sm text-text-primary">Текущая версия</p>
+          <p className="text-sm text-text-primary">Версия панели</p>
           <p className="text-xs text-text-muted font-mono">v{version || '—'}</p>
         </div>
         <div className="flex items-center gap-2">
-          {phase === 'upToDate' && <span className="badge badge-green">Актуальная версия</span>}
-          <button className="btn-ghost p-1" onClick={check} disabled={spinning} title="Проверить обновления">
+          {upPhase === 'upToDate' && <span className="badge badge-green">Актуальная версия</span>}
+          <button className="btn-ghost p-1" onClick={checkUpdates} disabled={spinning} title="Проверить обновления">
             {spinning ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
           </button>
         </div>
       </div>
-
-      {phase === 'error' && (
+      {upPhase === 'error' && (
         <div className="flex items-start gap-2 text-red-400 text-xs">
-          <AlertCircle size={13} className="shrink-0 mt-0.5" />
-          <span>{error}</span>
+          <AlertCircle size={13} className="shrink-0 mt-0.5" /><span>{upError}</span>
         </div>
+      )}
+
+      <div className="border-t border-border" />
+
+      {/* Sandboxie */}
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <p className="text-sm text-text-primary">Sandboxie Classic</p>
+          <p className="text-xs text-text-muted">Изоляция CS2 по аккаунтам</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {sbStatus === null ? (
+            <span className="badge badge-gray">Проверка...</span>
+          ) : sbStatus.installed ? (
+            <>
+              <CheckCircle size={13} className="text-green-400" />
+              <span className="badge badge-green">{sbStatus.version || 'Установлен'}</span>
+            </>
+          ) : (
+            <span className="badge badge-red">Не установлен</span>
+          )}
+          <button className="btn-ghost p-1" onClick={refreshSandboxie} title="Обновить" disabled={sbSpin}>
+            {sbSpin ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+          </button>
+        </div>
+      </div>
+
+      {sbStatus && !sbStatus.installed && sbPhase === 'idle' && (
+        <button className="btn-primary w-full" onClick={installSandboxie}>
+          <Download size={14} /> Установить Sandboxie Classic
+        </button>
+      )}
+      {sbPhase === 'installing' && (
+        <div className="flex items-center gap-2 text-sm text-text-secondary">
+          <Loader size={14} className="animate-spin text-accent-blue shrink-0" />
+          <span>{sbProgress || 'Подготовка...'}</span>
+        </div>
+      )}
+      {sbPhase === 'done' && (
+        <div className="flex items-center gap-2 text-green-400 text-sm">
+          <CheckCircle size={14} /><span>Sandboxie Classic успешно установлен!</span>
+        </div>
+      )}
+      {sbPhase === 'error' && (
+        <>
+          <div className="flex items-start gap-2 text-red-400 text-sm">
+            <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{sbError}</span>
+          </div>
+          <button className="btn-primary w-full" onClick={installSandboxie}>
+            <Download size={14} /> Повторить установку
+          </button>
+        </>
       )}
     </div>
   )
 }
 
-function SandboxieSection() {
-  const [status,   setStatus]   = useState(null)   // null | { installed, version }
-  const [phase,    setPhase]    = useState('idle')  // idle | installing | done | error
-  const [progress, setProgress] = useState('')
-  const [error,    setError]    = useState('')
-
+function DependenciesSection() {
+  const [deps,     setDeps]     = useState(null)
   const [spinning, setSpinning] = useState(false)
 
   const refresh = useCallback(() => {
-    setStatus(null)
+    setDeps(null)
     setSpinning(true)
     Promise.all([
-      window.api.sandboxie.status().then(setStatus),
+      window.api.deps.detect().then(setDeps),
       new Promise(r => setTimeout(r, 700)),
     ]).finally(() => setSpinning(false))
   }, [])
 
-  useEffect(() => {
-    refresh()
-    window.api.sandboxie.onProgress(msg => {
-      if (msg === '__done__') {
-        setPhase('done')
-        refresh()
-      } else if (msg.startsWith('__error__:')) {
-        setError(msg.replace('__error__:', ''))
-        setPhase('error')
-      } else {
-        setProgress(msg)
-      }
-    })
-    return () => window.api.sandboxie.offProgress()
-  }, [])
+  useEffect(() => { refresh() }, [])
 
-  const install = async () => {
-    setPhase('installing')
-    setError('')
-    setProgress('')
-    await window.api.sandboxie.install()
+  const shortPath = (p) => {
+    if (!p) return ''
+    const parts = p.replace(/\\/g, '/').split('/')
+    return parts.length > 3 ? `...\\${parts.slice(-2).join('\\')}` : p
   }
 
   return (
     <div className="card space-y-4">
-      <p className="text-sm font-medium text-text-primary border-b border-border pb-3 flex items-center gap-2">
-        <Box size={14} /> Зависимости
-      </p>
+      <div className="flex items-center justify-between border-b border-border pb-3">
+        <p className="text-sm font-medium text-text-primary flex items-center gap-2">
+          <Box size={14} /> Зависимости
+        </p>
+        <button className="btn-ghost p-1" onClick={refresh} title="Обновить" disabled={spinning}>
+          {spinning ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+        </button>
+      </div>
 
+      {/* Steam */}
       <div className="flex items-center justify-between">
         <div className="space-y-0.5">
-          <p className="text-sm text-text-primary">Sandboxie Classic</p>
-          <p className="text-xs text-text-muted">Требуется для изоляции CS2</p>
+          <p className="text-sm text-text-primary">Steam</p>
+          <p className="text-xs text-text-muted font-mono">
+            {deps?.steam?.path ? shortPath(deps.steam.path) : '—'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          {status === null ? (
+          {deps === null ? (
             <span className="badge badge-gray">Проверка...</span>
-          ) : status.installed ? (
+          ) : deps.steam.found ? (
             <>
-              <CheckCircle size={14} className="text-green-400" />
-              <span className="badge badge-green">
-                {status.version || 'Установлен'}
-              </span>
+              <CheckCircle size={13} className="text-green-400" />
+              <span className="badge badge-green">Найден</span>
             </>
           ) : (
-            <span className="badge badge-red">Не установлен</span>
+            <span className="badge badge-red">Не найден</span>
           )}
-          <button className="btn-ghost p-1" onClick={refresh} title="Обновить" disabled={spinning}>
-            {spinning ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-          </button>
         </div>
       </div>
 
-      {status && !status.installed && phase === 'idle' && (
-        <button className="btn-primary w-full" onClick={install}>
-          <Download size={14} />
-          Установить Sandboxie Classic
-        </button>
-      )}
-
-      {phase === 'installing' && (
-        <div className="flex items-center gap-2 text-sm text-text-secondary">
-          <Loader size={14} className="animate-spin text-accent-blue shrink-0" />
-          <span>{progress || 'Подготовка...'}</span>
+      {/* CS2 */}
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <p className="text-sm text-text-primary">Counter-Strike 2</p>
+          <p className="text-xs text-text-muted font-mono">
+            {deps?.cs2?.path ? shortPath(deps.cs2.path) : '—'}
+          </p>
         </div>
-      )}
-
-      {phase === 'done' && (
-        <div className="flex items-center gap-2 text-green-400 text-sm">
-          <CheckCircle size={14} />
-          <span>Sandboxie Classic успешно установлен!</span>
+        <div className="flex items-center gap-2">
+          {deps === null ? (
+            <span className="badge badge-gray">Проверка...</span>
+          ) : deps.cs2.found ? (
+            <>
+              <CheckCircle size={13} className="text-green-400" />
+              <span className="badge badge-green">Найден</span>
+            </>
+          ) : (
+            <span className="badge badge-yellow">Не найден</span>
+          )}
         </div>
-      )}
+      </div>
 
-      {phase === 'error' && (
-        <>
-          <div className="flex items-start gap-2 text-red-400 text-sm">
-            <AlertCircle size={14} className="shrink-0 mt-0.5" />
-            <span>{error}</span>
-          </div>
-          <button className="btn-primary w-full" onClick={install}>
-            <Download size={14} />
-            Повторить установку
-          </button>
-        </>
+      {deps && !deps.cs2.found && (
+        <p className="text-xs text-text-muted">
+          CS2 не найден — убедись что игра установлена через Steam.
+        </p>
       )}
     </div>
   )
@@ -264,8 +334,8 @@ export default function Settings() {
         </div>
       </div>
 
-      <UpdaterSection />
-      <SandboxieSection />
+      <UpdatesSection />
+      <DependenciesSection />
 
       <button
         className={`btn-primary ${saved ? 'bg-green-600 hover:bg-green-600' : ''}`}
