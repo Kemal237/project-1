@@ -125,9 +125,6 @@ class CS2Launcher extends EventEmitter {
       // Реестр Steam
       'OpenKeyPath=HKLM\\Software\\Valve',
       'OpenKeyPath=HKCU\\Software\\Valve',
-      // IPC необходимые для CS2 и Steam
-      'OpenIpcPath=\\BaseNamedObjects\\*',
-      'OpenIpcPath=\\Sessions\\*\\BaseNamedObjects\\*',
       '',
     ].join('\r\n')
 
