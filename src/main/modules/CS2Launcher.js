@@ -77,6 +77,9 @@ class CS2Launcher extends EventEmitter {
       await this._waitForProcess('cs2', CS2_LOBBY_WAIT_MS + 10_000, CS2_POLL_MS, CS2_LOBBY_WAIT_MS)
 
       onStatus('cs2_lobby', 'CS2 запущен — в лобби')
+
+      // Мониторим cs2.exe — когда закрывается, сбрасываем статус
+      this._monitorProcess(accountId, 'cs2', () => onStatus('idle', ''))
     } catch (e) {
       this._active.delete(accountId)
       throw e
@@ -152,6 +155,27 @@ class CS2Launcher extends EventEmitter {
       detached: true,
       stdio: 'ignore',
     }).unref()
+  }
+
+  _monitorProcess(accountId, name, onExit) {
+    const check = () => {
+      if (!this._active.has(accountId)) return // stop() уже вызван
+      try {
+        const out = execSync(
+          `tasklist /FI "IMAGENAME eq ${name}.exe" /NH`,
+          { encoding: 'utf8', timeout: 5000 }
+        )
+        if (out.toLowerCase().includes(`${name}.exe`)) {
+          setTimeout(check, 5000)
+        } else {
+          this._active.delete(accountId)
+          onExit()
+        }
+      } catch {
+        setTimeout(check, 5000)
+      }
+    }
+    setTimeout(check, 5000)
   }
 
   _waitForProcess(name, timeoutMs, pollMs, stabilityMs = 0, onFound = null) {
