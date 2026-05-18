@@ -61,7 +61,7 @@ class CS2Launcher extends EventEmitter {
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
       this._spawnInBox(sbPath, boxName, steamPath, [
         '-login', creds.login, creds.password,
-        '-silent', '-noreactlogin',
+        '-noreactlogin',
       ])
 
       await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
