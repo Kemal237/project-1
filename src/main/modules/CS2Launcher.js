@@ -62,7 +62,7 @@ class CS2Launcher extends EventEmitter {
         '-applaunch', '730', ...CS2_FLAGS,
       ])
 
-      await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS)
+      await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS, 6000)
 
       onStatus('cs2_lobby', 'CS2 запущен — в лобби')
     } catch (e) {
@@ -103,25 +103,24 @@ class CS2Launcher extends EventEmitter {
       try { ini = readFileSync(iniPath, 'utf8') } catch {}
     }
 
-    if (ini.includes(`[${boxName}]`)) {
-      // Box already in INI — still reload to ensure service has it loaded
-      try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
-      return
+    const alreadyConfigured = ini.includes(`[${boxName}]`)
+
+    if (!alreadyConfigured) {
+      const entry = [
+        `[${boxName}]`,
+        'Enabled=y',
+        'AutoRecover=n',
+        'MsiInstallerExemptions=y',
+        `OpenFilePath=${join(steamPath, 'steamapps')}`,
+        'OpenKeyPath=HKLM\\Software\\Valve',
+        'OpenKeyPath=HKCU\\Software\\Valve',
+        '',
+      ].join('\r\n')
+
+      writeFileSync(iniPath, ini + entry, 'utf16le') // throws on failure — caller handles it
     }
 
-    const entry = [
-      `[${boxName}]`,
-      'Enabled=y',
-      'AutoRecover=n',
-      `OpenFilePath=${join(steamPath, 'steamapps')}`,
-      'OpenKeyPath=HKLM\\Software\\Valve',
-      'OpenKeyPath=HKCU\\Software\\Valve',
-      '',
-    ].join('\r\n')
-
-    writeFileSync(iniPath, ini + entry, 'utf16le') // throws on failure — caller handles it
-
-    // Signal Sandboxie service to reload config so the new box is recognized
+    // Signal Sandboxie service to reload config (always — service may have restarted)
     try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
   }
 
@@ -134,22 +133,44 @@ class CS2Launcher extends EventEmitter {
     }).unref()
   }
 
-  _waitForProcess(name, timeoutMs, pollMs) {
+  _waitForProcess(name, timeoutMs, pollMs, stabilityMs = 0) {
+    const isRunning = () => {
+      try {
+        const out = execSync(
+          `tasklist /FI "IMAGENAME eq ${name}.exe" /NH`,
+          { encoding: 'utf8', timeout: 5000 }
+        )
+        return out.toLowerCase().includes(`${name}.exe`)
+      } catch { return false }
+    }
+
     return new Promise((resolve, reject) => {
       let done = false
       const deadline = Date.now() + timeoutMs
+
       const check = () => {
         if (done) return
-        try {
-          const out = execSync(
-            `tasklist /FI "IMAGENAME eq ${name}.exe" /NH`,
-            { encoding: 'utf8', timeout: 5000 }
-          )
-          if (out.toLowerCase().includes(`${name}.exe`)) {
+        if (isRunning()) {
+          if (stabilityMs <= 0) {
             done = true
             return resolve()
           }
-        } catch {}
+          // Stability check: verify process is still alive after stabilityMs
+          setTimeout(() => {
+            if (done) return
+            if (isRunning()) {
+              done = true
+              return resolve()
+            }
+            // Process died — keep waiting
+            if (Date.now() > deadline) {
+              done = true
+              return reject(new Error(`Timeout: ${name}.exe не запустился за ${timeoutMs / 1000}с`))
+            }
+            setTimeout(check, pollMs)
+          }, stabilityMs)
+          return
+        }
         if (Date.now() > deadline) {
           done = true
           return reject(new Error(`Timeout: ${name}.exe не запустился за ${timeoutMs / 1000}с`))
