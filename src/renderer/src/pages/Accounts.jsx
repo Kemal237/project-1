@@ -24,9 +24,9 @@ const STATUS_LABEL = {
   online:         'Онлайн',
   farming:        'Фармит',
   lobby:          'В лобби',
-  cs2_launching:  'Запуск Steam',
+  cs2_launching:  'Запуск CS2',
   cs2_searching:  'Ищет матч',
-  cs2_loading:    'Загрузка...',
+  cs2_loading:    'CS2 загружается',
   cs2_match:      'В матче',
   cs2_lobby:      'Лобби CS2',
   connecting:     'Подключение...',
@@ -401,7 +401,7 @@ export default function Accounts() {
 
   const handleSteamGuardClose = () => setSteamGuardRequest(null)
 
-  const CS2_ACTIVE = new Set(['cs2_launching', 'cs2_lobby'])
+  const CS2_ACTIVE = new Set(['cs2_launching', 'cs2_loading', 'cs2_lobby'])
 
   const handleStartCS2 = async (id) => { await window.api.launcher.start(id) }
   const handleStopCS2  = async (id) => { await window.api.launcher.stop(id) }

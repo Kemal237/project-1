@@ -10,15 +10,19 @@ const SANDBOXIE_PATHS = [
   'C:\\Program Files (x86)\\Sandboxie',
 ]
 
-const STEAM_POLL_MS    = 2000
-const STEAM_TIMEOUT_MS = 40_000
-const CS2_POLL_MS      = 3000
-const CS2_TIMEOUT_MS   = 120_000
+const STEAM_POLL_MS      = 2000
+const STEAM_TIMEOUT_MS   = 40_000
+const CS2_POLL_MS        = 3000
+const CS2_TIMEOUT_MS     = 120_000
+const CS2_LOBBY_WAIT_MS  = 90_000  // сколько ждём после появления cs2.exe до статуса "лобби"
 
 const CS2_FLAGS = [
   '-windowed', '-w', '800', '-h', '600',
   '-novid',
   '+fps_max', '30',
+  '+r_dynamic', '0',       // динамическое освещение выкл
+  '+cl_detail_max_sway', '0',
+  '+mat_queue_mode', '0',  // минимальная очередь рендера
 ]
 
 class CS2Launcher extends EventEmitter {
@@ -64,7 +68,13 @@ class CS2Launcher extends EventEmitter {
         '-applaunch', '730', ...CS2_FLAGS,
       ])
 
-      await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS, 6000)
+      // Ждём появления cs2.exe → переключаем на "Загрузка"
+      await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS, 0,
+        () => onStatus('cs2_loading', 'CS2 загружается...')
+      )
+
+      // Ждём пока CS2 загрузит интро и дойдёт до главного меню
+      await this._waitForProcess('cs2', CS2_LOBBY_WAIT_MS + 10_000, CS2_POLL_MS, CS2_LOBBY_WAIT_MS)
 
       onStatus('cs2_lobby', 'CS2 запущен — в лобби')
     } catch (e) {
@@ -144,7 +154,7 @@ class CS2Launcher extends EventEmitter {
     }).unref()
   }
 
-  _waitForProcess(name, timeoutMs, pollMs, stabilityMs = 0) {
+  _waitForProcess(name, timeoutMs, pollMs, stabilityMs = 0, onFound = null) {
     const isRunning = () => {
       try {
         const out = execSync(
@@ -162,6 +172,8 @@ class CS2Launcher extends EventEmitter {
       const check = () => {
         if (done) return
         if (isRunning()) {
+          onFound?.()  // уведомляем о первом обнаружении процесса
+          onFound = null // вызываем только один раз
           if (stabilityMs <= 0) {
             done = true
             return resolve()
