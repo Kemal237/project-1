@@ -111,6 +111,7 @@ class CS2Launcher extends EventEmitter {
         'Enabled=y',
         'AutoRecover=n',
         'MsiInstallerExemptions=y',
+        'DropAdminRights=y',
         `OpenFilePath=${join(steamPath, 'steamapps')}`,
         'OpenKeyPath=HKLM\\Software\\Valve',
         'OpenKeyPath=HKCU\\Software\\Valve',
