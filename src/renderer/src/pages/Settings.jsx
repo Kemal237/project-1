@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw, Folder, Check } from 'lucide-react'
+import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw, Folder, Check, Trash2 } from 'lucide-react'
 
 function UpdatesSection() {
   // — Updater —
@@ -116,6 +116,14 @@ function UpdatesSection() {
             <>
               <CheckCircle size={13} className="text-green-400" />
               <span className="badge badge-green">{sbStatus.version || 'Установлен'}</span>
+              <button className="btn-ghost p-1 text-red-400 hover:text-red-300" title="Удалить Sandboxie"
+                onClick={async () => {
+                  if (!confirm('Удалить Sandboxie Classic?')) return
+                  await window.api.sandboxie.uninstall()
+                  refreshSandboxie()
+                }}>
+                <Trash2 size={13} />
+              </button>
             </>
           ) : (
             <span className="badge badge-red">Не установлен</span>

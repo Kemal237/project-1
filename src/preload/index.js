@@ -2,12 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('api', {
   accounts: {
-    getAll:          ()       => ipcRenderer.invoke('accounts:getAll'),
-    add:             (d)      => ipcRenderer.invoke('accounts:add', d),
-    update:          (id, d)  => ipcRenderer.invoke('accounts:update', id, d),
-    delete:          (id)     => ipcRenderer.invoke('accounts:delete', id),
-    import:          (text)   => ipcRenderer.invoke('accounts:import', text),
-    getCredentials:  (id)     => ipcRenderer.invoke('accounts:getCredentials', id),
+    getAll:          ()            => ipcRenderer.invoke('accounts:getAll'),
+    add:             (d)           => ipcRenderer.invoke('accounts:add', d),
+    update:          (id, d)       => ipcRenderer.invoke('accounts:update', id, d),
+    delete:          (id)          => ipcRenderer.invoke('accounts:delete', id),
+    import:          (text)        => ipcRenderer.invoke('accounts:import', text),
+    getCredentials:  (id)          => ipcRenderer.invoke('accounts:getCredentials', id),
+    importMaFile:    (id, path)    => ipcRenderer.invoke('accounts:importMaFile', id, path),
   },
   proxies: {
     getAll:    ()           => ipcRenderer.invoke('proxies:getAll'),
@@ -84,6 +85,7 @@ contextBridge.exposeInMainWorld('api', {
   sandboxie: {
     status:     ()    => ipcRenderer.invoke('sandboxie:status'),
     install:    ()    => ipcRenderer.invoke('sandboxie:install'),
+    uninstall:  ()    => ipcRenderer.invoke('sandboxie:uninstall'),
     onProgress: (cb)  => {
       ipcRenderer.removeAllListeners('sandboxie:progress')
       ipcRenderer.on('sandboxie:progress', (_, msg) => cb(msg))
@@ -96,6 +98,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   dialog: {
     openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
+    openMaFile: () => ipcRenderer.invoke('dialog:openMaFile'),
   },
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),

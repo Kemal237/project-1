@@ -1,4 +1,5 @@
 import { ipcMain, dialog, app } from 'electron'
+import { readFileSync } from 'fs'
 import { autoUpdater } from 'electron-updater'
 import accountManager    from './modules/AccountManager'
 import proxyManager      from './modules/ProxyManager'
@@ -92,6 +93,11 @@ export function setupIPC() {
 
   ipcMain.handle('sandboxie:status', () => sandboxieManager.getStatus())
 
+  ipcMain.handle('sandboxie:uninstall', async () => {
+    try { sandboxieManager.uninstall(); return { ok: true } }
+    catch (e) { return { ok: false, error: e.message } }
+  })
+
   ipcMain.handle('sandboxie:install', async (event) => {
     const send = msg => event.sender.send('sandboxie:progress', msg)
     try {
@@ -104,8 +110,32 @@ export function setupIPC() {
     }
   })
 
+  ipcMain.handle('accounts:importMaFile', async (_, id, filePath) => {
+    try {
+      const raw = readFileSync(filePath, 'utf8')
+      const ma  = JSON.parse(raw)
+      if (!ma.shared_secret) return { ok: false, error: 'shared_secret не найден в maFile' }
+      accountManager.update(id, {
+        sharedSecret:   ma.shared_secret   || '',
+        identitySecret: ma.identity_secret || '',
+      })
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  })
+
   ipcMain.handle('dialog:openFolder', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    return result.canceled ? null : result.filePaths[0]
+  })
+
+  ipcMain.handle('dialog:openMaFile', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Выбери maFile',
+      filters: [{ name: 'Steam maFile', extensions: ['maFile'] }],
+      properties: ['openFile'],
+    })
     return result.canceled ? null : result.filePaths[0]
   })
 }

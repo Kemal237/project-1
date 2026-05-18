@@ -404,6 +404,14 @@ export default function Accounts() {
   const CS2_ACTIVE = new Set(['cs2_launching', 'cs2_loading', 'cs2_lobby'])
 
   const handleStartCS2 = async (id) => { await window.api.launcher.start(id) }
+
+  const handleImportMaFile = async (id) => {
+    const filePath = await window.api.dialog.openMaFile()
+    if (!filePath) return
+    const result = await window.api.accounts.importMaFile(id, filePath)
+    if (result.ok) loadAccounts()
+    else alert('Ошибка импорта maFile: ' + result.error)
+  }
   const handleStopCS2  = async (id) => { await window.api.launcher.stop(id) }
 
   const filtered = accounts.filter(a =>
@@ -574,9 +582,12 @@ export default function Accounts() {
                   <td className="px-4 py-3 text-center">
                     <div className="inline-flex items-center justify-center gap-1.5">
                       <div className="relative group/sg">
-                        <Smartphone size={15} className={a.hasSharedSecret ? 'text-green-400' : 'text-text-muted opacity-40'} />
+                        <button className="btn-ghost p-0.5" onClick={() => handleImportMaFile(a.id)}
+                          title={a.hasSharedSecret ? 'maFile подключён — кликни чтобы заменить' : 'Импортировать maFile'}>
+                          <Smartphone size={15} className={a.hasSharedSecret ? 'text-green-400' : 'text-text-muted opacity-40'} />
+                        </button>
                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-xs bg-gray-900 text-white rounded border border-border whitespace-nowrap opacity-0 group-hover/sg:opacity-100 transition-opacity duration-150 pointer-events-none z-50">
-                          {a.hasSharedSecret ? 'Мобильный аутентификатор подключён' : 'Mafile не добавлен'}
+                          {a.hasSharedSecret ? 'maFile подключён (кликни чтобы заменить)' : 'Кликни чтобы импортировать maFile'}
                         </div>
                       </div>
                       <div className="relative group/id">

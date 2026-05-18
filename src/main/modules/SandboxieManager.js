@@ -39,6 +39,17 @@ class SandboxieManager {
     return { installed, version: installed ? this.getVersion() : null }
   }
 
+  uninstall() {
+    for (const base of INSTALL_PATHS) {
+      const uninstaller = path.join(base, 'uninstall.exe')
+      if (existsSync(uninstaller)) {
+        execSync(`"${uninstaller}" /S`, { timeout: 60_000 })
+        return true
+      }
+    }
+    throw new Error('Деинсталлятор Sandboxie не найден')
+  }
+
   async install(onProgress) {
     onProgress('Получение информации о последнем релизе...')
 
