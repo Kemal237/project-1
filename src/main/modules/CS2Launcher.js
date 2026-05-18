@@ -10,10 +10,12 @@ const SANDBOXIE_PATHS = [
   'C:\\Program Files (x86)\\Sandboxie',
 ]
 
-const STEAM_POLL_MS    = 2000
-const STEAM_TIMEOUT_MS = 40_000
-const CS2_POLL_MS      = 3000
-const CS2_TIMEOUT_MS   = 120_000
+const STEAM_POLL_MS      = 2000
+const STEAM_TIMEOUT_MS   = 40_000
+const READY_POLL_MS      = 3000
+const READY_TIMEOUT_MS   = 180_000 // 3 мин — учитываем первичную верификацию Steam
+const CS2_POLL_MS        = 3000
+const CS2_TIMEOUT_MS     = 120_000
 
 // Minimal flags — убраны устаревшие -nosound -nojoy +cl_forcepreload
 const CS2_FLAGS = [
@@ -60,8 +62,10 @@ class CS2Launcher extends EventEmitter {
 
       await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
 
-      // Даём Steam время загрузиться и авторизоваться
-      await new Promise(r => setTimeout(r, 5000))
+      // Ждём steamwebhelper.exe — он появляется только когда Steam
+      // полностью загрузился, прошёл верификацию и авторизовался
+      onStatus('cs2_launching', 'Ожидание инициализации Steam...')
+      await this._waitForProcess('steamwebhelper', READY_TIMEOUT_MS, READY_POLL_MS)
 
       onStatus('cs2_launching', 'Запуск CS2...')
       this._spawnSteam(sbPath, boxName, steamPath, [
@@ -109,31 +113,38 @@ class CS2Launcher extends EventEmitter {
       try { ini = readFileSync(iniPath, 'utf8') } catch {}
     }
 
-    // Всегда перезаписываем секцию бокса чтобы настройки были актуальны
     const boxHeader = `[${boxName}]`
-    if (ini.includes(boxHeader)) {
-      ini = ini.replace(new RegExp(`\\[${boxName}\\][^\\[]*`, 's'), '')
+    const boxExists = ini.includes(boxHeader)
+
+    if (!boxExists) {
+      // Бокс не настроен — пробуем записать
+      const entry = [
+        boxHeader,
+        'Enabled=y',
+        'AutoRecover=n',
+        'MsiInstallerExemptions=y',
+        `OpenFilePath=${join(steamPath, 'steamapps')}`,
+        `OpenFilePath=${join(cs2Path, 'game')}`,
+        'OpenKeyPath=HKLM\\Software\\Valve',
+        'OpenKeyPath=HKCU\\Software\\Valve',
+        'OpenPipePath=\\Device\\NamedPipe\\*',
+        '',
+      ].join('\r\n')
+
+      try {
+        writeFileSync(iniPath, ini + entry, 'utf16le')
+      } catch (e) {
+        if (e.code === 'EPERM') {
+          throw new Error(
+            'Sandboxie бокс не настроен. Запусти панель от имени администратора один раз ' +
+            'чтобы создать конфигурацию, после этого права администратора не понадобятся.'
+          )
+        }
+        throw e
+      }
     }
 
-    const entry = [
-      boxHeader,
-      'Enabled=y',
-      'AutoRecover=n',
-      'MsiInstallerExemptions=y',
-      'DropAdminRights=y',
-      // Общий доступ к файлам игры (не копируются в бокс)
-      `OpenFilePath=${join(steamPath, 'steamapps')}`,
-      `OpenFilePath=${join(cs2Path, 'game')}`,
-      // Реестр Steam
-      'OpenKeyPath=HKLM\\Software\\Valve',
-      'OpenKeyPath=HKCU\\Software\\Valve',
-      // Named pipes для Steam Service ↔ steam.exe/cs2.exe
-      'OpenPipePath=\\Device\\NamedPipe\\*',
-      '',
-    ].join('\r\n')
-
-    writeFileSync(iniPath, ini + entry, 'utf16le')
-
+    // Перезагружаем конфиг Sandboxie (бокс уже есть или только что создан)
     try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
   }
 
