@@ -125,6 +125,8 @@ class CS2Launcher extends EventEmitter {
       // Реестр Steam
       'OpenKeyPath=HKLM\\Software\\Valve',
       'OpenKeyPath=HKCU\\Software\\Valve',
+      // Named pipes для Steam Service ↔ steam.exe/cs2.exe
+      'OpenPipePath=\\Device\\NamedPipe\\*',
       '',
     ].join('\r\n')
 
