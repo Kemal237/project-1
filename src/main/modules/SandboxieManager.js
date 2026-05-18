@@ -28,7 +28,7 @@ class SandboxieManager {
       // try exe version as fallback
       for (const base of INSTALL_PATHS) {
         const exe = path.join(base, 'SbieCtrl.exe')
-        if (existsSync(exe)) return 'установлен'
+        if (existsSync(exe)) return 'Установлен'
       }
       return null
     }
