@@ -32,7 +32,8 @@ const CS2_FLAGS = [
 class CS2Launcher extends EventEmitter {
   constructor() {
     super()
-    this._active = new Map()
+    this._active  = new Map()
+    this._iniLock = false   // mutex — не пишем INI одновременно из двух аккаунтов
   }
 
   isRunning(accountId) {
@@ -152,41 +153,49 @@ class CS2Launcher extends EventEmitter {
   }
 
   async _configureSandboxBox(sbPath, boxName, steamPath, cs2Path) {
-    const iniPath = 'C:\\Windows\\Sandboxie.ini'
-    let ini = ''
-    try { ini = readFileSync(iniPath, 'utf16le') } catch {
-      try { ini = readFileSync(iniPath, 'utf8') } catch {}
-    }
+    // Ждём если другой аккаунт сейчас пишет INI
+    while (this._iniLock) await new Promise(r => setTimeout(r, 200))
+    this._iniLock = true
 
-    if (!ini.includes(`[${boxName}]`)) {
-      const entry = [
-        `[${boxName}]`,
-        'Enabled=y',
-        'AutoRecover=n',
-        'MsiInstallerExemptions=y',
-        `OpenFilePath=${join(steamPath, 'steamapps')}`,
-        `OpenFilePath=${join(cs2Path, 'game')}`,
-        'OpenKeyPath=HKLM\\Software\\Valve',
-        'OpenKeyPath=HKCU\\Software\\Valve',
-        'OpenPipePath=\\Device\\NamedPipe\\*',
-        '',
-      ].join('\r\n')
-
-      try {
-        writeFileSync(iniPath, ini + entry, 'utf16le')
-      } catch (e) {
-        if (e.code === 'EPERM') {
-          throw new Error(
-            'Sandboxie бокс не настроен. Запусти панель от имени администратора ' +
-            'один раз чтобы создать конфигурацию.'
-          )
-        }
-        throw e
+    try {
+      const iniPath = 'C:\\Windows\\Sandboxie.ini'
+      let ini = ''
+      try { ini = readFileSync(iniPath, 'utf16le') } catch {
+        try { ini = readFileSync(iniPath, 'utf8') } catch {}
       }
 
-      try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
-      // Ждём пока Sandboxie сервис обработает изменения в INI
-      await new Promise(r => setTimeout(r, 2000))
+      if (!ini.includes(`[${boxName}]`)) {
+        const entry = [
+          `[${boxName}]`,
+          'Enabled=y',
+          'AutoRecover=n',
+          'MsiInstallerExemptions=y',
+          `OpenFilePath=${join(steamPath, 'steamapps')}`,
+          `OpenFilePath=${join(cs2Path, 'game')}`,
+          'OpenKeyPath=HKLM\\Software\\Valve',
+          'OpenKeyPath=HKCU\\Software\\Valve',
+          'OpenPipePath=\\Device\\NamedPipe\\*',
+          '',
+        ].join('\r\n')
+
+        try {
+          writeFileSync(iniPath, ini.trimEnd() + '\r\n\r\n' + entry, 'utf16le')
+        } catch (e) {
+          if (e.code === 'EPERM') {
+            throw new Error(
+              'Sandboxie бокс не настроен. Запусти панель от имени администратора ' +
+              'один раз чтобы создать конфигурацию.'
+            )
+          }
+          throw e
+        }
+
+        try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
+        // Ждём пока Sandboxie сервис обработает новую конфигурацию
+        await new Promise(r => setTimeout(r, 3000))
+      }
+    } finally {
+      this._iniLock = false
     }
   }
 
