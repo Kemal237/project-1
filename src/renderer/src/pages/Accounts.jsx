@@ -626,9 +626,8 @@ export default function Accounts() {
                         </button>
                       ) : (
                         <button className="btn-ghost p-1.5" title="Запустить CS2"
-                          onClick={() => handleStartCS2(a.id)}
-                          disabled={active}>
-                          <Gamepad2 size={13} className={active ? 'text-text-muted opacity-40' : 'text-blue-400'} />
+                          onClick={() => handleStartCS2(a.id)}>
+                          <Gamepad2 size={13} className="text-blue-400" />
                         </button>
                       )}
                       <button className="btn-ghost p-1.5" title="Редактировать" onClick={() => setEditId(a.id)}>

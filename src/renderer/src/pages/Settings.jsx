@@ -27,7 +27,12 @@ function UpdatesSection() {
   useEffect(() => {
     window.api.updater.getVersion().then(setVersion)
     window.api.updater.onUpToDate(() => { setUpPhase('upToDate'); setSpinning(false) })
-    window.api.updater.onError(msg  => { setUpPhase('error'); setUpError(msg); setSpinning(false) })
+    window.api.updater.onError(msg  => {
+      const friendly = /ERR_CONNECTION|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(msg)
+        ? 'Нет подключения к серверу обновлений'
+        : msg
+      setUpPhase('error'); setUpError(friendly); setSpinning(false)
+    })
 
     refreshSandboxie()
     window.api.sandboxie.onProgress(msg => {
