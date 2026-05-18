@@ -1,6 +1,6 @@
 {
   "name": "cs2-farm-panel",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "CS2 Case Farm Panel",
   "author": "Kemal237",
   "main": "out/main/index.js",
