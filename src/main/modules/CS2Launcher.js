@@ -64,8 +64,9 @@ class CS2Launcher extends EventEmitter {
       await new Promise(r => setTimeout(r, 5000))
 
       onStatus('cs2_launching', 'Запуск CS2...')
-      const cs2Exe = join(cs2Path, 'game', 'bin', 'win64', 'cs2.exe')
-      this._spawnExe(sbPath, boxName, cs2Exe, CS2_FLAGS)
+      this._spawnSteam(sbPath, boxName, steamPath, [
+        '-applaunch', '730', ...CS2_FLAGS,
+      ])
 
       await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS, 6000)
 
