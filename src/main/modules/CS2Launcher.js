@@ -103,23 +103,25 @@ class CS2Launcher extends EventEmitter {
       try { ini = readFileSync(iniPath, 'utf8') } catch {}
     }
 
-    const alreadyConfigured = ini.includes(`[${boxName}]`)
-
-    if (!alreadyConfigured) {
-      const entry = [
-        `[${boxName}]`,
-        'Enabled=y',
-        'AutoRecover=n',
-        'MsiInstallerExemptions=y',
-        'DropAdminRights=y',
-        `OpenFilePath=${join(steamPath, 'steamapps')}`,
-        'OpenKeyPath=HKLM\\Software\\Valve',
-        'OpenKeyPath=HKCU\\Software\\Valve',
-        '',
-      ].join('\r\n')
-
-      writeFileSync(iniPath, ini + entry, 'utf16le') // throws on failure — caller handles it
+    // Always rewrite box entry to keep settings current
+    const boxHeader = `[${boxName}]`
+    if (ini.includes(boxHeader)) {
+      // Remove old entry (from header to next section or end of file)
+      ini = ini.replace(new RegExp(`\\[${boxName}\\][^\\[]*`, 's'), '')
     }
+
+    const entry = [
+      boxHeader,
+      'Enabled=y',
+      'AutoRecover=n',
+      'MsiInstallerExemptions=y',
+      `OpenFilePath=${join(steamPath, 'steamapps')}`,
+      'OpenKeyPath=HKLM\\Software\\Valve',
+      'OpenKeyPath=HKCU\\Software\\Valve',
+      '',
+    ].join('\r\n')
+
+    writeFileSync(iniPath, ini + entry, 'utf16le') // throws on failure — caller handles it
 
     // Signal Sandboxie service to reload config (always — service may have restarted)
     try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
