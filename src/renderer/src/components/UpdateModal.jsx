@@ -44,11 +44,16 @@ export default function UpdateModal({ info, onDismiss }) {
         </div>
 
         {info?.releaseNotes && phase === 'available' && (
-          <div className="bg-bg-secondary rounded-lg p-3 text-xs text-text-secondary max-h-32 overflow-y-auto">
-            {typeof info.releaseNotes === 'string'
-              ? info.releaseNotes
-              : 'Новая версия панели готова к установке.'}
-          </div>
+          <div
+            className="bg-bg-secondary rounded-lg p-3 text-xs text-text-secondary max-h-40 overflow-y-auto prose-sm [&_h2]:font-semibold [&_h2]:text-text-primary [&_h2]:mb-1 [&_h3]:font-medium [&_h3]:text-text-primary [&_h3]:mb-1 [&_p]:mb-1.5 [&_code]:bg-bg-card [&_code]:px-1 [&_code]:rounded [&_strong]:text-text-primary [&_ul]:list-disc [&_ul]:pl-4"
+            dangerouslySetInnerHTML={{
+              __html: typeof info.releaseNotes === 'string'
+                ? info.releaseNotes
+                : Array.isArray(info.releaseNotes)
+                  ? info.releaseNotes.map(r => r.note || '').join('<hr/>')
+                  : 'Новая версия панели готова к установке.'
+            }}
+          />
         )}
 
         {phase === 'available' && !info?.releaseNotes && (

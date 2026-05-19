@@ -148,7 +148,10 @@ function AddAccountModal({ proxies, onSave, onClose }) {
   const save = async () => {
     if (!form.login || !form.password) return
     const { id } = await window.api.accounts.add({ ...form, proxyId: form.proxyId || null })
-    if (maFilePath) await window.api.accounts.importMaFile(id, maFilePath)
+    if (maFilePath) {
+      const r = await window.api.accounts.importMaFile(id, maFilePath)
+      if (!r.ok) alert('Ошибка импорта maFile: ' + r.error)
+    }
     onSave()
   }
 
@@ -220,16 +223,28 @@ function EditAccountModal({ account, proxies, onSave, onClose }) {
     proxyId: account.proxyId != null ? String(account.proxyId) : '',
     notes:   account.notes || '',
   })
+  const [maFilePath, setMaFilePath] = useState(null)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const pickMaFile = async () => {
+    const path = await window.api.dialog.openMaFile()
+    if (path) setMaFilePath(path)
+  }
 
   const save = async () => {
     if (!form.login) return
     const patch = { login: form.login, proxyId: form.proxyId || null, notes: form.notes }
     if (form.password) patch.password = form.password
     await window.api.accounts.update(account.id, patch)
+    if (maFilePath) {
+      const r = await window.api.accounts.importMaFile(account.id, maFilePath)
+      if (!r.ok) alert('Ошибка импорта maFile: ' + r.error)
+    }
     onSave()
   }
+
+  const maFileName = maFilePath ? maFilePath.split('\\').pop().split('/').pop() : null
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
@@ -244,11 +259,31 @@ function EditAccountModal({ account, proxies, onSave, onClose }) {
             <label className="label">Пароль <span className="text-text-muted">(оставь пустым чтобы не менять)</span></label>
             <input className="input" type="password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="••••••••" />
           </div>
-          <div className="flex items-center gap-2 py-1">
-            <ShieldCheck size={13} className={account.hasSharedSecret ? 'text-green-400' : 'text-text-muted'} />
-            <span className="text-xs text-text-muted">
-              {account.hasSharedSecret ? 'maFile импортирован (авто-2FA активен)' : 'maFile не импортирован — используй кнопку на аккаунте'}
-            </span>
+          <div>
+            <label className="label">
+              maFile
+              {account.hasSharedSecret
+                ? <span className="text-green-400 ml-1.5 text-[10px]">✓ импортирован</span>
+                : <span className="text-text-muted ml-1.5">(не импортирован)</span>}
+            </label>
+            <div className="relative">
+              <div
+                className="input w-full text-xs font-mono truncate pr-8 cursor-pointer flex items-center"
+                onClick={pickMaFile}
+                title="Выбрать maFile"
+              >
+                {maFileName
+                  ? <span className="text-green-400">{maFileName}</span>
+                  : <span className="text-text-muted">{account.hasSharedSecret ? 'Выбрать новый файл...' : 'Не выбран'}</span>}
+              </div>
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors"
+                onClick={maFilePath ? () => setMaFilePath(null) : pickMaFile}
+                title={maFilePath ? 'Убрать' : 'Выбрать maFile'}
+              >
+                {maFilePath ? <Trash2 size={13} className="text-red-400" /> : <Smartphone size={13} />}
+              </button>
+            </div>
           </div>
           <div>
             <label className="label">Прокси</label>
