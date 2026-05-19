@@ -92,7 +92,11 @@ class CS2Launcher extends EventEmitter {
       // Мониторим cs2.exe — когда закрывается, сбрасываем статус
       this._monitorProcess(accountId, 'cs2', () => onStatus('idle', ''))
     } catch (e) {
+      // Если accountId уже удалён из _active — значит stop() вызван пользователем.
+      // Не считаем это ошибкой: процессы убиты намеренно, не нужно ставить status=error.
+      const stoppedByUser = !this._active.has(accountId)
       this._active.delete(accountId)
+      if (stoppedByUser) return
       throw e
     }
   }
