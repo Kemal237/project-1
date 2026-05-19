@@ -152,6 +152,13 @@ class CS2Launcher extends EventEmitter {
     return null
   }
 
+  _isSbieCtrlRunning() {
+    try {
+      const out = execSync('tasklist /FI "IMAGENAME eq SbieCtrl.exe" /NH', { encoding: 'utf8', timeout: 3000 })
+      return out.toLowerCase().includes('sbiectrl.exe')
+    } catch { return false }
+  }
+
   async _configureSandboxBox(sbPath, boxName, steamPath, cs2Path) {
     // Ждём если другой аккаунт сейчас пишет INI
     while (this._iniLock) await new Promise(r => setTimeout(r, 200))
@@ -159,41 +166,62 @@ class CS2Launcher extends EventEmitter {
 
     try {
       const iniPath = 'C:\\Windows\\Sandboxie.ini'
-      let ini = ''
-      try { ini = readFileSync(iniPath, 'utf16le') } catch {
-        try { ini = readFileSync(iniPath, 'utf8') } catch {}
-      }
 
-      if (!ini.includes(`[${boxName}]`)) {
-        const entry = [
-          `[${boxName}]`,
-          'Enabled=y',
-          'AutoRecover=n',
-          'MsiInstallerExemptions=y',
-          `OpenFilePath=${join(steamPath, 'steamapps')}`,
-          `OpenFilePath=${join(cs2Path, 'game')}`,
-          'OpenKeyPath=HKLM\\Software\\Valve',
-          'OpenKeyPath=HKCU\\Software\\Valve',
-          'OpenPipePath=\\Device\\NamedPipe\\*',
-          '',
-        ].join('\r\n')
+      // BOM-aware read: Sandboxie.ini обычно UTF-16LE с BOM
+      let ini = '', encoding = 'utf16le'
+      try {
+        const raw = readFileSync(iniPath)
+        const hasBOM = raw.length >= 2 && raw[0] === 0xFF && raw[1] === 0xFE
+        encoding = hasBOM ? 'utf16le' : 'utf8'
+        ini = raw.toString(encoding)
+        if (ini.charCodeAt(0) === 0xFEFF) ini = ini.slice(1) // убираем BOM-символ из строки
+      } catch {}
 
-        try {
-          writeFileSync(iniPath, ini.trimEnd() + '\r\n\r\n' + entry, 'utf16le')
-        } catch (e) {
-          if (e.code === 'EPERM') {
-            throw new Error(
-              'Sandboxie бокс не настроен. Запусти панель от имени администратора ' +
-              'один раз чтобы создать конфигурацию.'
-            )
-          }
-          throw e
+      if (ini.includes(`[${boxName}]`)) return // бокс уже есть
+
+      const entry = [
+        `[${boxName}]`,
+        'Enabled=y',
+        'AutoRecover=n',
+        'MsiInstallerExemptions=y',
+        `OpenFilePath=${join(steamPath, 'steamapps')}`,
+        `OpenFilePath=${join(cs2Path, 'game')}`,
+        'OpenKeyPath=HKLM\\Software\\Valve',
+        'OpenKeyPath=HKCU\\Software\\Valve',
+        'OpenPipePath=\\Device\\NamedPipe\\*',
+        '',
+      ].join('\r\n')
+
+      // Записываем с BOM если файл был UTF-16LE
+      try {
+        const newContent = ini.trimEnd() + '\r\n\r\n' + entry
+        if (encoding === 'utf16le') {
+          const bom = Buffer.from([0xFF, 0xFE])
+          writeFileSync(iniPath, Buffer.concat([bom, Buffer.from(newContent, 'utf16le')]))
+        } else {
+          writeFileSync(iniPath, newContent, 'utf8')
         }
-
-        try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
-        // Ждём пока Sandboxie сервис обработает новую конфигурацию
-        await new Promise(r => setTimeout(r, 3000))
+      } catch (e) {
+        if (e.code === 'EPERM') throw new Error('Нет прав на запись Sandboxie.ini. Запусти панель от имени администратора.')
+        throw e
       }
+
+      // SbieCtrl.exe /reload работает ТОЛЬКО если SbieCtrl.exe уже запущен:
+      // он ищет окно класса SbieCtrl через FindWindow() и PostMessage — если окна нет,
+      // reload уходит в никуда и SbieSvc никогда не узнаёт об изменении.
+      if (!this._isSbieCtrlRunning()) {
+        spawn(join(sbPath, 'SbieCtrl.exe'), [], { detached: true, stdio: 'ignore' }).unref()
+        // Ждём появления процесса (max 8 секунд)
+        const deadline = Date.now() + 8000
+        while (!this._isSbieCtrlRunning() && Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 400))
+        }
+        await new Promise(r => setTimeout(r, 800)) // доп. время инициализации окна
+      }
+
+      // Теперь SbieCtrl.exe запущен — /reload найдёт его окно и передаст команду SbieSvc
+      try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
+      await new Promise(r => setTimeout(r, 1500))
     } finally {
       this._iniLock = false
     }
