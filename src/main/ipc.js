@@ -129,8 +129,13 @@ export function setupIPC() {
   ipcMain.handle('accounts:importMaFile', async (_, id, filePath) => {
     try {
       const raw = readFileSync(filePath, 'utf8')
-      const ma  = JSON.parse(raw)
-      if (!ma.shared_secret) return { ok: false, error: 'shared_secret не найден в maFile' }
+      let ma
+      try {
+        ma = JSON.parse(raw)
+      } catch {
+        return { ok: false, error: 'Файл не является валидным JSON. Возможно, он зашифрован паролем — используй незашифрованный maFile из Steam Desktop Authenticator.' }
+      }
+      if (!ma.shared_secret) return { ok: false, error: 'Поле shared_secret не найдено в maFile. Проверь что выбран правильный файл.' }
       accountManager.update(id, {
         sharedSecret:   ma.shared_secret   || '',
         identitySecret: ma.identity_secret || '',
