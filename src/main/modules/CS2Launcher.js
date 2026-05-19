@@ -1,6 +1,7 @@
 import { execSync, spawn } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync, readdirSync } from 'fs'
 import { join } from 'path'
+import { userInfo } from 'os'
 import { EventEmitter } from 'events'
 import steamConfigPatcher from './SteamConfigPatcher'
 
@@ -65,6 +66,11 @@ class CS2Launcher extends EventEmitter {
       this._cleanBoxState(sbPath, boxName)
       await new Promise(r => setTimeout(r, 800))
 
+      // Чистим cached Steam credentials в sandbox-папке бокса. Без этого Steam
+      // при повторном запуске использует cached login (если бокс ранее был
+      // запущен с другим аккаунтом), игнорируя флаг -login.
+      this._wipeSandboxCredentials(boxName, steamPath)
+
       onStatus('steam_launching', 'Запуск Steam...')
       this._spawnInBox(sbPath, boxName, steamPath, [
         '-login', creds.login, creds.password,
@@ -115,6 +121,39 @@ class CS2Launcher extends EventEmitter {
     } catch {}
     try {
       execSync(`"${join(sbPath, 'Start.exe')}" /box:${boxName} /terminate`, { timeout: 10_000, stdio: 'pipe' })
+    } catch {}
+  }
+
+  // Удаляет cached Steam credentials из песочной папки бокса.
+  // Без этого Steam при повторном запуске использует loginusers.vdf + ssfn*
+  // от прошлой сессии (когда бокс мог быть запущен с другим аккаунтом),
+  // и игнорирует флаг -login.
+  // Sandboxie по умолчанию хранит файлы в C:\Sandbox\<user>\<box>\drive\C\...
+  _wipeSandboxCredentials(boxName, steamPath) {
+    const username = userInfo().username
+    // Конвертируем хостовый путь Steam в путь внутри песочницы:
+    // "C:\Program Files (x86)\Steam" → "C:\Sandbox\<user>\<box>\drive\C\Program Files (x86)\Steam"
+    const driveLetter = steamPath[0]
+    const restPath    = steamPath.slice(2) // убираем "C:" чтобы оставить "\Program Files (x86)\Steam"
+    const sandboxSteam = `C:\\Sandbox\\${username}\\${boxName}\\drive\\${driveLetter}${restPath}`
+
+    if (!existsSync(sandboxSteam)) return  // бокс ещё не запускался — нечего чистить
+
+    const filesToDelete = [
+      join(sandboxSteam, 'config', 'loginusers.vdf'),
+      join(sandboxSteam, 'config', 'config.vdf'),
+    ]
+    for (const f of filesToDelete) {
+      try { rmSync(f, { force: true }) } catch {}
+    }
+
+    // ssfn* — Steam Guard токены, имя содержит hex-suffix
+    try {
+      for (const f of readdirSync(sandboxSteam)) {
+        if (f.toLowerCase().startsWith('ssfn')) {
+          try { rmSync(join(sandboxSteam, f), { force: true }) } catch {}
+        }
+      }
     } catch {}
   }
 
@@ -207,9 +246,16 @@ class CS2Launcher extends EventEmitter {
   }
 
   // Вызывается при старте панели — создаёт боксы для всех аккаунтов.
-  async setupBoxes(accountIds, steamPath, cs2Path) {
+  // options.wipeFirst=true → сначала полностью удаляет все CS2Bot_* боксы
+  // (конфиг + sandbox-файлы), потом создаёт заново. Используется для одноразовой
+  // миграции на чистый конфиг при апгрейде версии.
+  async setupBoxes(accountIds, steamPath, cs2Path, options = {}) {
     const sbPath = this._findSandboxie()
     if (!sbPath) return
+
+    if (options.wipeFirst) {
+      await this._wipeAllBotBoxes(sbPath)
+    }
 
     // Основной путь: SbieIni.exe — официальный CLI, который изменяет конфиг
     // через службу и автоматически вызывает API_RELOAD_CONF. Не требует UAC
@@ -226,6 +272,72 @@ class CS2Launcher extends EventEmitter {
       await this._restartSbieSvc()
     } catch (e) {
       console.log('[CS2Launcher] setupBoxes restart failed:', e.message)
+    }
+  }
+
+  // Полностью удаляет ВСЕ CS2Bot_* боксы (Sandboxie.ini секции + файлы песочниц).
+  // После этого setupBoxes пересоздаст их заново с актуальным конфигом.
+  // Используется для миграции на чистый конфиг (старые боксы могли иметь
+  // унаследованные настройки которые мешают работе).
+  async _wipeAllBotBoxes(sbPath) {
+    const iniPath = 'C:\\Windows\\Sandboxie.ini'
+
+    // 1. Найти все CS2Bot_* секции в Sandboxie.ini
+    let content = '', encoding = 'utf16le'
+    try {
+      const raw = readFileSync(iniPath)
+      const hasBOM = raw.length >= 2 && raw[0] === 0xFF && raw[1] === 0xFE
+      encoding = hasBOM ? 'utf16le' : 'utf8'
+      content = raw.toString(encoding)
+      if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1)
+    } catch {}
+
+    const boxNames = [...content.matchAll(/^\[(CS2Bot_[^\]]+)\]/gm)].map(m => m[1])
+
+    // 2. Остановить и удалить каждый бокс
+    for (const box of boxNames) {
+      try {
+        execSync(`"${join(sbPath, 'Stop.exe')}" /box:${box}`, { timeout: 10_000, stdio: 'pipe' })
+      } catch {}
+      try {
+        execSync(`"${join(sbPath, 'Start.exe')}" /box:${box} /terminate`, { timeout: 10_000, stdio: 'pipe' })
+      } catch {}
+    }
+
+    // 3. Удалить секции из INI напрямую (надёжнее чем SbieIni delete_section
+    //    которая может быть недоступна в старых версиях Sandboxie Classic)
+    let newContent = content
+    for (const box of boxNames) {
+      // Удаляем секцию [Box] и все её строки до следующей секции или конца файла
+      const re = new RegExp(`^\\[${box}\\][^\\[]*`, 'gm')
+      newContent = newContent.replace(re, '')
+    }
+    newContent = newContent.replace(/\n{3,}/g, '\n\n').trimEnd() + '\r\n'
+
+    try {
+      if (encoding === 'utf16le') {
+        const bom = Buffer.from([0xFF, 0xFE])
+        writeFileSync(iniPath, Buffer.concat([bom, Buffer.from(newContent, 'utf16le')]))
+      } else {
+        writeFileSync(iniPath, newContent, encoding)
+      }
+    } catch (e) {
+      console.log('[CS2Launcher] _wipeAllBotBoxes INI write:', e.message)
+    }
+
+    // 4. Удалить sandbox-файлы (C:\Sandbox\<user>\CS2Bot_*\)
+    const sandboxBase = `C:\\Sandbox\\${userInfo().username}`
+    if (existsSync(sandboxBase)) {
+      for (const dir of readdirSync(sandboxBase)) {
+        if (dir.startsWith('CS2Bot_')) {
+          try { rmSync(join(sandboxBase, dir), { recursive: true, force: true }) } catch {}
+        }
+      }
+    }
+
+    // 5. Перезапустить SbieSvc чтобы перечитал INI (UAC prompt)
+    if (this._isSandboxieServiceStale()) {
+      try { await this._restartSbieSvc() } catch {}
     }
   }
 
@@ -265,11 +377,19 @@ class CS2Launcher extends EventEmitter {
     const configVdf     = join(steamPath, 'config', 'config.vdf')
     const ssfnGlob      = join(steamPath, 'ssfn*')
 
+    // Legacy cleanup: удаляем старый OpenKeyPath HKCU\Software\Valve из боксов
+    // прошлых версий панели (давал прямой доступ к реестру креденшалов хоста).
+    const cleanups = [
+      ['delete', 'OpenKeyPath', 'HKCU\\Software\\Valve'],
+    ]
+
     // set перезаписывает single-value; append добавляет в multi-value (skips если уже есть).
-    // ВАЖНО: OpenKeyPath HKCU\Software\Valve УБРАН — давал boxed Steam прямой
-    // доступ к реестру с креденшалами хоста, из-за чего входило в чужой аккаунт.
-    // ClosedFilePath блокирует boxed Steam от чтения cached login файлов хоста
-    // (loginusers.vdf, config.vdf, ssfn* токены Steam Guard).
+    // ВАЖНО:
+    // - OpenKeyPath HKCU\Software\Valve УБРАН — давал boxed Steam прямой
+    //   доступ к реестру хоста с AutoLoginUser/RememberPassword.
+    // - ClosedFilePath блокирует cached login файлы хоста.
+    // - ClosedIpcPath блокирует Global\STEAM_* объекты чтобы boxed Steam
+    //   не общался с host Steam через named objects.
     const ops = [
       ['set',    'Enabled',                'y'],
       ['set',    'AutoRecover',            'n'],
@@ -281,6 +401,9 @@ class CS2Launcher extends EventEmitter {
       ['append', 'ClosedFilePath',         loginusersVdf],
       ['append', 'ClosedFilePath',         configVdf],
       ['append', 'ClosedFilePath',         ssfnGlob],
+      ['append', 'ClosedIpcPath',          '\\BaseNamedObjects\\STEAM_*'],
+      ['append', 'ClosedIpcPath',          '\\BaseNamedObjects\\Steam*'],
+      ['append', 'ClosedIpcPath',          '*\\STEAM_BROADCAST*'],
     ]
 
     for (const id of accountIds) {

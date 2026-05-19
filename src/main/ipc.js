@@ -20,7 +20,13 @@ export function setupIPC() {
       const steamPath = await steamConfigPatcher.detectSteamPath()
       const cs2Path   = await steamConfigPatcher.detectCS2Path(steamPath)
       if (steamPath && cs2Path) {
-        await cs2Launcher.setupBoxes(accounts.map(a => a.id), steamPath, cs2Path)
+        // Одноразовая миграция в v1.0.50: полностью wipe старые боксы (могли иметь
+        // унаследованные настройки) и пересоздать с актуальным безопасным конфигом.
+        const wipedFlag = 'boxes_wiped_v1050'
+        const allSettings = settings.getAll()
+        const wipeFirst = allSettings[wipedFlag] !== 'true'
+        await cs2Launcher.setupBoxes(accounts.map(a => a.id), steamPath, cs2Path, { wipeFirst })
+        if (wipeFirst) settings.set(wipedFlag, 'true')
       }
     } catch (e) {
       console.log('[Startup] Sandboxie setupBoxes:', e.message)
