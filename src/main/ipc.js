@@ -128,18 +128,25 @@ export function setupIPC() {
 
   ipcMain.handle('accounts:importMaFile', async (_, id, filePath) => {
     try {
-      const raw = readFileSync(filePath, 'utf8')
+      const raw = readFileSync(filePath, 'utf8').replace(/^﻿/, '') // убираем BOM если есть
       let ma
-      try {
-        ma = JSON.parse(raw)
-      } catch {
+      try { ma = JSON.parse(raw) } catch {
         return { ok: false, error: 'Файл не является валидным JSON. Возможно, он зашифрован паролем — используй незашифрованный maFile из Steam Desktop Authenticator.' }
       }
-      if (!ma.shared_secret) return { ok: false, error: 'Поле shared_secret не найдено в maFile. Проверь что выбран правильный файл.' }
-      accountManager.update(id, {
-        sharedSecret:   ma.shared_secret   || '',
-        identitySecret: ma.identity_secret || '',
-      })
+
+      const sharedSecret   = ma.shared_secret   ? String(ma.shared_secret).trim()   : ''
+      const identitySecret = ma.identity_secret ? String(ma.identity_secret).trim() : ''
+
+      if (!sharedSecret) return { ok: false, error: 'Поле shared_secret не найдено или пустое в maFile. Проверь что выбран правильный файл.' }
+
+      accountManager.update(id, { sharedSecret, identitySecret })
+
+      // Верифицируем что данные реально сохранились в БД
+      const creds = accountManager.getCredentials(id)
+      if (!creds?.sharedSecret) {
+        return { ok: false, error: 'Ошибка записи в базу данных. Попробуй снова.' }
+      }
+
       return { ok: true }
     } catch (e) {
       return { ok: false, error: e.message }
