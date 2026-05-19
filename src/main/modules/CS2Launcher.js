@@ -97,10 +97,10 @@ class CS2Launcher extends EventEmitter {
         '-applaunch', '730', ...CS2_FLAGS,
       ])
 
-      // Ждём появления НАШЕГО sandboxed cs2.exe
-      await this._waitForNewBoxedProcess('cs2', prevCs2Count, CS2_TIMEOUT_MS, CS2_POLL_MS,
-        () => onStatus('cs2_loading', 'CS2 загружается...')
-      )
+      // Ждём появления НАШЕГО sandboxed cs2.exe без жёсткого таймаута.
+      // Если CS2 грузится дольше обычного — не падаем в ошибку, обновляем статус
+      // и продолжаем ждать пока пользователь не нажмёт «Стоп» или cs2.exe не появится.
+      await this._waitForCs2WithSoftTimeout(accountId, prevCs2Count, onStatus)
 
       // Ждём 90с чтобы CS2 загрузился до лобби
       await new Promise(r => setTimeout(r, CS2_LOBBY_WAIT_MS))
@@ -562,6 +562,45 @@ class CS2Launcher extends EventEmitter {
         }
         setTimeout(check, pollMs)
       }
+      check()
+    })
+  }
+
+  // Ждёт появления sandboxed cs2.exe без жёсткого таймаута.
+  // Через 90с — обновляет статус «CS2 ещё грузится...» чтобы пользователь не думал что завис.
+  // Через 3 мин — предупреждает что процесс идёт очень долго.
+  // Если аккаунт удалён из _active (пользователь нажал Стоп) — тихо выходим.
+  _waitForCs2WithSoftTimeout(accountId, prevCount, onStatus) {
+    return new Promise(resolve => {
+      let detected = false
+
+      const check = () => {
+        if (!this._active.has(accountId)) { resolve(); return }
+        const count = this._countBoxedProcesses('cs2')
+        if (count > prevCount) {
+          if (!detected) {
+            detected = true
+            onStatus('cs2_loading', 'CS2 загружается...')
+          }
+          resolve()
+          return
+        }
+        setTimeout(check, CS2_POLL_MS)
+      }
+
+      // Информационные обновления статуса при долгом запуске (не ошибка)
+      setTimeout(() => {
+        if (!detected && this._active.has(accountId)) {
+          onStatus('cs2_launching', 'CS2 ещё запускается...')
+        }
+      }, 90_000)
+
+      setTimeout(() => {
+        if (!detected && this._active.has(accountId)) {
+          onStatus('cs2_launching', 'CS2 запускается долго — подождите или нажмите «Стоп»')
+        }
+      }, 3 * 60_000)
+
       check()
     })
   }
