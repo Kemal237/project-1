@@ -140,13 +140,6 @@ export function setupIPC() {
       if (!sharedSecret) return { ok: false, error: 'Поле shared_secret не найдено или пустое в maFile. Проверь что выбран правильный файл.' }
 
       accountManager.update(id, { sharedSecret, identitySecret })
-
-      // Верифицируем что данные реально сохранились в БД
-      const creds = accountManager.getCredentials(id)
-      if (!creds?.sharedSecret) {
-        return { ok: false, error: 'Ошибка записи в базу данных. Попробуй снова.' }
-      }
-
       return { ok: true }
     } catch (e) {
       return { ok: false, error: e.message }
