@@ -78,10 +78,12 @@ class CS2Launcher extends EventEmitter {
       ])
 
       await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
-      onStatus('steam_running', 'Steam запущен, авторизация...')
 
-      // Даём Steam время войти в аккаунт перед запуском CS2
-      await new Promise(r => setTimeout(r, 5000))
+      // Steam.exe появился, но ещё идёт загрузка (splash screen).
+      // Ждём пока Steam загрузится и авторизуется — только потом меняем статус.
+      await new Promise(r => setTimeout(r, 8000))
+      onStatus('steam_running', 'Steam авторизован')
+      await new Promise(r => setTimeout(r, 1000))
 
       onStatus('cs2_launching', 'Запуск CS2...')
       this._patchCS2VideoSettings(cs2Path)
