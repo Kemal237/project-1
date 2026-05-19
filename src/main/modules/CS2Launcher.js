@@ -184,13 +184,17 @@ class CS2Launcher extends EventEmitter {
     const sbPath = this._findSandboxie()
     if (!sbPath) return
 
+    // Основной путь: SbieIni.exe — официальный CLI, который изменяет конфиг
+    // через службу и автоматически вызывает API_RELOAD_CONF. Не требует UAC
+    // (служба уже работает), служба сразу знает о новом боксе.
+    if (this._setupBoxesViaSbieIni(sbPath, accountIds, steamPath, cs2Path)) return
+
+    // Fallback: прямая запись в Sandboxie.ini + перезапуск службы через UAC.
     try { this._writeBoxesToIni(accountIds, steamPath, cs2Path) } catch (e) {
       console.log('[CS2Launcher] setupBoxes write:', e.message)
       return
     }
-
-    if (!this._isSandboxieServiceStale()) return  // служба уже знает о боксах
-
+    if (!this._isSandboxieServiceStale()) return
     try {
       await this._restartSbieSvc()
     } catch (e) {
@@ -203,12 +207,14 @@ class CS2Launcher extends EventEmitter {
     while (this._iniLock) await new Promise(r => setTimeout(r, 200))
     this._iniLock = true
     try {
-      this._writeBoxesToIni([boxName.replace('CS2Bot_', '')], steamPath, cs2Path)
+      const id = boxName.replace('CS2Bot_', '')
 
-      // КЛЮЧЕВОЕ: проверяем staleness, а не только "есть ли бокс в INI".
-      // Если UAC был отклонён ранее — бокс в INI, но служба о нём не знает.
+      // Основной путь: SbieIni.exe. После него служба сразу знает о боксе.
+      if (this._setupBoxesViaSbieIni(sbPath, [id], steamPath, cs2Path)) return
+
+      // Fallback: прямая запись + перезапуск службы.
+      this._writeBoxesToIni([id], steamPath, cs2Path)
       if (!this._isSandboxieServiceStale()) return
-
       try {
         await this._restartSbieSvc()
       } catch {
@@ -217,6 +223,45 @@ class CS2Launcher extends EventEmitter {
     } finally {
       this._iniLock = false
     }
+  }
+
+  // Использует SbieIni.exe — официальный путь Sandboxie для изменения конфига.
+  // SbieIni шлёт IPC в SbieSvc, который записывает INI и вызывает API_RELOAD_CONF.
+  // Возвращает true если SbieIni доступен и все операции прошли успешно.
+  _setupBoxesViaSbieIni(sbPath, accountIds, steamPath, cs2Path) {
+    const sbieIni = join(sbPath, 'SbieIni.exe')
+    if (!existsSync(sbieIni)) return false
+
+    const steamAppsPath = join(steamPath, 'steamapps')
+    const csgoPath      = join(cs2Path,   'game')
+
+    // set перезаписывает single-value; append добавляет в multi-value (skips если уже есть)
+    const ops = [
+      ['set',    'Enabled',                'y'],
+      ['set',    'AutoRecover',            'n'],
+      ['set',    'MsiInstallerExemptions', 'y'],
+      ['append', 'OpenFilePath',           steamAppsPath],
+      ['append', 'OpenFilePath',           csgoPath],
+      ['append', 'OpenKeyPath',            'HKLM\\Software\\Valve'],
+      ['append', 'OpenKeyPath',            'HKCU\\Software\\Valve'],
+      ['append', 'OpenPipePath',           '\\Device\\NamedPipe\\*'],
+    ]
+
+    for (const id of accountIds) {
+      const boxName = `CS2Bot_${id}`
+      for (const [cmd, key, value] of ops) {
+        try {
+          execSync(`"${sbieIni}" ${cmd} "${boxName}" ${key} "${value}"`, {
+            timeout: 10_000,
+            stdio: 'pipe',
+          })
+        } catch (e) {
+          console.log(`[CS2Launcher] SbieIni ${cmd} ${boxName} ${key}: ${e.message}`)
+          return false
+        }
+      }
+    }
+    return true
   }
 
   // Читает INI, добавляет отсутствующие боксы, записывает обратно.

@@ -28,7 +28,21 @@ export function setupIPC() {
   }, 5000)
 
   ipcMain.handle('accounts:getAll',    ()           => accountManager.getAll())
-  ipcMain.handle('accounts:add',       (_, d)       => accountManager.add(d))
+  ipcMain.handle('accounts:add',       async (_, d) => {
+    const result = accountManager.add(d)
+    // Сразу создаём бокс Sandboxie — служба узнает о боксе через SbieIni,
+    // и при запуске CS2 не будет ошибки "Invalid box name parameter".
+    try {
+      const steamPath = await steamConfigPatcher.detectSteamPath()
+      const cs2Path   = await steamConfigPatcher.detectCS2Path(steamPath)
+      if (steamPath && cs2Path) {
+        await cs2Launcher.setupBoxes([result.id], steamPath, cs2Path)
+      }
+    } catch (e) {
+      console.log('[accounts:add] setupBoxes:', e.message)
+    }
+    return result
+  })
   ipcMain.handle('accounts:update',    (_, id, d)   => accountManager.update(id, d))
   ipcMain.handle('accounts:delete',    (_, id)      => accountManager.delete(id))
   ipcMain.handle('accounts:import',        (_, text)    => accountManager.importFromText(text))
