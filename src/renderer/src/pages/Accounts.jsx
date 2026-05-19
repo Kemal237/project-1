@@ -137,21 +137,42 @@ function SteamGuardModal({ request, onSubmit, onClose }) {
 function AddAccountModal({ proxies, onSave, onClose }) {
   const [form, setForm] = useState({ login: '', password: '', proxyId: '', notes: '' })
   const [maFilePath, setMaFilePath] = useState(null)
+  const [maError, setMaError] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const pickMaFile = async () => {
     const path = await window.api.dialog.openMaFile()
-    if (path) setMaFilePath(path)
+    if (path) { setMaFilePath(path); setMaError('') }
   }
 
   const save = async () => {
     if (!form.login || !form.password) return
-    const { id } = await window.api.accounts.add({ ...form, proxyId: form.proxyId || null })
+    setSaving(true)
+    setMaError('')
+
+    // Если выбран maFile — сначала проверяем его, только потом добавляем аккаунт
     if (maFilePath) {
+      const testId = -1  // временный id для проверки формата файла
+      // Читаем файл на валидность через тот же IPC но с фиктивным id (не сохранится)
+      // Вместо этого добавим аккаунт и сразу откатим если maFile не ок
+      const { id } = await window.api.accounts.add({ ...form, proxyId: form.proxyId || null })
       const r = await window.api.accounts.importMaFile(id, maFilePath)
-      if (!r.ok) alert('Ошибка импорта maFile: ' + r.error)
+      if (!r.ok) {
+        // Откатываем — удаляем только что добавленный аккаунт
+        await window.api.accounts.delete(id)
+        setMaError(r.error)
+        setSaving(false)
+        return
+      }
+      setSaving(false)
+      onSave()
+      return
     }
+
+    await window.api.accounts.add({ ...form, proxyId: form.proxyId || null })
+    setSaving(false)
     onSave()
   }
 
@@ -184,7 +205,7 @@ function AddAccountModal({ proxies, onSave, onClose }) {
               </div>
               <button
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors"
-                onClick={maFilePath ? () => setMaFilePath(null) : pickMaFile}
+                onClick={maFilePath ? () => { setMaFilePath(null); setMaError('') } : pickMaFile}
                 title={maFilePath ? 'Убрать' : 'Выбрать maFile'}
               >
                 {maFilePath
@@ -192,6 +213,9 @@ function AddAccountModal({ proxies, onSave, onClose }) {
                   : <Smartphone size={13} />}
               </button>
             </div>
+            {maError && (
+              <p className="text-xs text-red-400 mt-1">{maError}</p>
+            )}
           </div>
           <div>
             <label className="label">Прокси</label>
@@ -208,8 +232,11 @@ function AddAccountModal({ proxies, onSave, onClose }) {
           </div>
         </div>
         <div className="flex gap-2 mt-5 justify-end">
-          <button className="btn-ghost" onClick={onClose}>Отмена</button>
-          <button className="btn-primary" onClick={save}>Добавить</button>
+          <button className="btn-ghost" onClick={onClose} disabled={saving}>Отмена</button>
+          <button className="btn-primary" onClick={save} disabled={saving}>
+            {saving ? <Loader size={13} className="animate-spin" /> : null}
+            Добавить
+          </button>
         </div>
       </div>
     </div>
