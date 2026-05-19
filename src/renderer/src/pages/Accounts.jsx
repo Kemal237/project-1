@@ -41,7 +41,7 @@ const STATUS_LABEL = {
 
 const CS2_STATUSES = new Set(['farming', 'lobby', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_lobby'])
 
-const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard'])
+const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'no_prime'])
 
 function playBeep() {
   try {
@@ -675,17 +675,16 @@ export default function Accounts() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {!noPrime && (
-                        active
-                          ? <button className="btn-ghost p-1.5" title="Отключить" onClick={() => handleStop(a.id)}>
-                              <Square size={13} className="text-red-400" />
-                            </button>
-                          : <button className="btn-ghost p-1.5" title="Подключить"
-                              onClick={() => handleStart(a.id)}
-                              disabled={CS2_ACTIVE.has(status)}>
-                              <Play size={13} className={CS2_ACTIVE.has(status) ? 'text-text-muted opacity-40' : 'text-green-400'} />
-                            </button>
-                      )}
+                      {active
+                        ? <button className="btn-ghost p-1.5" title="Отключить" onClick={() => handleStop(a.id)}>
+                            <Square size={13} className="text-red-400" />
+                          </button>
+                        : <button className="btn-ghost p-1.5" title="Подключить"
+                            onClick={() => handleStart(a.id)}
+                            disabled={CS2_ACTIVE.has(status)}>
+                            <Play size={13} className={CS2_ACTIVE.has(status) ? 'text-text-muted opacity-40' : 'text-green-400'} />
+                          </button>
+                      }
                       {CS2_ACTIVE.has(status) ? (
                         <button className="btn-ghost p-1.5" title="Остановить CS2"
                           onClick={() => handleStopCS2(a.id)}>
