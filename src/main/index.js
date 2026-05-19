@@ -80,12 +80,20 @@ app.whenReady().then(async () => {
 
   if (app.isPackaged) {
     autoUpdater.autoDownload = false
-    autoUpdater.on('update-available',  (info) => win.webContents.send('updater:available', info))
-    autoUpdater.on('update-not-available', ()   => win.webContents.send('updater:upToDate'))
-    autoUpdater.on('download-progress', (prog) => win.webContents.send('updater:progress', prog))
-    autoUpdater.on('update-downloaded', (info) => win.webContents.send('updater:downloaded', info))
-    autoUpdater.on('error',             (err)  => win.webContents.send('updater:error', err.message))
-    setTimeout(() => autoUpdater.checkForUpdates(), 5000)
+    autoUpdater.on('update-available',    (info) => win.webContents.send('updater:available', info))
+    autoUpdater.on('update-not-available',  ()   => win.webContents.send('updater:upToDate'))
+    autoUpdater.on('download-progress',  (prog) => win.webContents.send('updater:progress', prog))
+    autoUpdater.on('update-downloaded',  (info) => win.webContents.send('updater:downloaded', info))
+    autoUpdater.on('error',              (err)  => win.webContents.send('updater:error', err.message))
+
+    // Запускаем проверку только ПОСЛЕ того как renderer полностью загрузился —
+    // иначе event updater:available уходит в никуда если listener ещё не зарегистрирован.
+    win.webContents.once('did-finish-load', () => {
+      setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 3000)
+    })
+
+    // Периодическая проверка каждые 30 минут для долгоживущих сессий
+    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 30 * 60 * 1000)
   }
 })
 
