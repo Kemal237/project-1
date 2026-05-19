@@ -59,6 +59,12 @@ class CS2Launcher extends EventEmitter {
       onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
       await this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
 
+      // Фикс SBIE2308 "Could not create object directory" — чистим kernel-объекты
+      // от прошлых сессий бокса (даже если процессов нет). Без этого первый запуск
+      // после ребута/переустановки/смены версии Sandboxie может упасть с C0000024.
+      this._cleanBoxState(sbPath, boxName)
+      await new Promise(r => setTimeout(r, 800))
+
       onStatus('cs2_launching', 'Запуск Steam в боксе...')
       this._spawnInBox(sbPath, boxName, steamPath, [
         '-login', creds.login, creds.password,
@@ -89,6 +95,19 @@ class CS2Launcher extends EventEmitter {
       this._active.delete(accountId)
       throw e
     }
+  }
+
+  // Чистит kernel-объекты бокса (object directories, мьютексы, события).
+  // Решает SBIE2308 C0000024 (STATUS_OBJECT_TYPE_MISMATCH) — ошибку
+  // которая возникает когда от прошлой сессии осталась object directory
+  // того же имени но другого типа (или с другими permissions).
+  _cleanBoxState(sbPath, boxName) {
+    try {
+      execSync(`"${join(sbPath, 'Stop.exe')}" /box:${boxName}`, { timeout: 10_000, stdio: 'pipe' })
+    } catch {}
+    try {
+      execSync(`"${join(sbPath, 'Start.exe')}" /box:${boxName} /terminate`, { timeout: 10_000, stdio: 'pipe' })
+    } catch {}
   }
 
   stop(accountId) {

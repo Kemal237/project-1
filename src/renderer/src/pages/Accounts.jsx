@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight, Gamepad2 } from 'lucide-react'
+import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight, Gamepad2, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const STATUS_BADGE = {
   online:         'badge-green',
@@ -58,7 +58,7 @@ function playBeep() {
   } catch {}
 }
 
-function SteamGuardModal({ request, onSubmit, onClose }) {
+function SteamGuardModal({ request, total = 1, index = 0, onPrev, onNext, onSubmit, onClose }) {
   const [code, setCode] = useState('')
   const [timeLeft, setTimeLeft] = useState(120)
 
@@ -84,12 +84,43 @@ function SteamGuardModal({ request, onSubmit, onClose }) {
     if (e.key === 'Enter') submit()
   }
 
+  const hasMultiple = total > 1
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-bg-card border border-border rounded-xl w-[400px] p-6 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-text-primary">Steam Guard</h2>
-          <span className="text-sm text-text-muted">{timeLeft}с</span>
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold text-text-primary">Steam Guard</h2>
+            {hasMultiple && (
+              <span className="text-xs text-text-muted bg-bg-secondary px-2 py-0.5 rounded-full">
+                {index + 1} из {total}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {hasMultiple && (
+              <>
+                <button
+                  className="btn-ghost p-1 disabled:opacity-30"
+                  onClick={onPrev}
+                  disabled={index === 0}
+                  title="Предыдущий аккаунт"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <button
+                  className="btn-ghost p-1 disabled:opacity-30"
+                  onClick={onNext}
+                  disabled={index === total - 1}
+                  title="Следующий аккаунт"
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </>
+            )}
+            <span className="text-sm text-text-muted ml-2">{timeLeft}с</span>
+          </div>
         </div>
         <div className="text-sm text-text-secondary">
           <span className="font-mono text-text-primary">{request.login}</span>
@@ -388,7 +419,8 @@ export default function Accounts() {
   const [modal, setModal]                   = useState(null)
   const [selected, setSelected]             = useState(new Set())
   const [workerStatuses, setWorkerStatuses] = useState({})
-  const [steamGuardRequest, setSteamGuardRequest] = useState(null)
+  const [steamGuardQueue, setSteamGuardQueue] = useState([])
+  const [guardIndex, setGuardIndex]           = useState(0)
   const [dropToast, setDropToast] = useState(null)
   const [isRefreshing, setIsRefreshing]   = useState(false)
   const [isStartingAll, setIsStartingAll] = useState(false)
@@ -418,7 +450,16 @@ export default function Accounts() {
       setWorkerStatuses(prev => ({ ...prev, [accountId]: { status: 'error', message } }))
     })
     window.api.farm.onSteamGuard(({ accountId, domain, lastCodeWrong }) => {
-      setSteamGuardRequest({ accountId, domain, lastCodeWrong })
+      setSteamGuardQueue(prev => {
+        const idx = prev.findIndex(r => r.accountId === accountId)
+        if (idx >= 0) {
+          // Тот же аккаунт повторно просит код (например, после неверного кода) — обновляем
+          const next = [...prev]
+          next[idx] = { accountId, domain, lastCodeWrong }
+          return next
+        }
+        return [...prev, { accountId, domain, lastCodeWrong }]
+      })
       playBeep()
       const prevTitle = document.title
       document.title = '🔔 Введи Steam Guard код!'
@@ -462,10 +503,14 @@ export default function Accounts() {
 
   const handleSteamGuardSubmit = async (accountId, code) => {
     await window.api.farm.submitCode(accountId, code)
-    setSteamGuardRequest(null)
+    setSteamGuardQueue(prev => prev.filter(r => r.accountId !== accountId))
+    setGuardIndex(0)
   }
 
-  const handleSteamGuardClose = () => setSteamGuardRequest(null)
+  const handleSteamGuardClose = () => {
+    setSteamGuardQueue(prev => prev.filter((_, i) => i !== guardIndex))
+    setGuardIndex(i => Math.max(0, i - 1))
+  }
 
   const CS2_ACTIVE = new Set(['cs2_launching', 'cs2_loading', 'cs2_lobby'])
 
@@ -722,16 +767,24 @@ export default function Accounts() {
       {modal === 'add'    && <AddAccountModal proxies={proxies} onSave={() => { load(); setModal(null) }} onClose={() => setModal(null)} />}
       {modal === 'import' && <ImportModal onSave={load} onClose={() => setModal(null)} />}
       {editId && <EditAccountModal account={accounts.find(a => a.id === editId)} proxies={proxies} onSave={() => { load(); setEditId(null) }} onClose={() => setEditId(null)} />}
-      {steamGuardRequest && (
-        <SteamGuardModal
-          request={{
-            ...steamGuardRequest,
-            login: accounts.find(a => a.id === steamGuardRequest.accountId)?.login ?? String(steamGuardRequest.accountId),
-          }}
-          onSubmit={handleSteamGuardSubmit}
-          onClose={handleSteamGuardClose}
-        />
-      )}
+      {steamGuardQueue.length > 0 && (() => {
+        const safeIdx = Math.min(guardIndex, steamGuardQueue.length - 1)
+        const current = steamGuardQueue[safeIdx]
+        return (
+          <SteamGuardModal
+            request={{
+              ...current,
+              login: accounts.find(a => a.id === current.accountId)?.login ?? String(current.accountId),
+            }}
+            total={steamGuardQueue.length}
+            index={safeIdx}
+            onPrev={() => setGuardIndex(i => Math.max(0, i - 1))}
+            onNext={() => setGuardIndex(i => Math.min(steamGuardQueue.length - 1, i + 1))}
+            onSubmit={handleSteamGuardSubmit}
+            onClose={handleSteamGuardClose}
+          />
+        )
+      })()}
       {dropToast && (
         <div className="fixed bottom-6 right-6 bg-bg-card border border-green-500/40 rounded-xl px-4 py-3 shadow-xl z-50 flex items-center gap-3">
           <Package size={16} className="text-green-400 shrink-0" />
