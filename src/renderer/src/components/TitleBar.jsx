@@ -1,6 +1,10 @@
+import { useEffect, useState } from 'react'
 import { Minus, Square, X } from 'lucide-react'
 
 export default function TitleBar() {
+  const [version, setVersion] = useState('')
+  useEffect(() => { window.api.updater.getVersion().then(setVersion) }, [])
+
   return (
     <div className="titlebar-drag flex items-center justify-between h-10 bg-bg-secondary border-b border-border px-4 shrink-0">
       <div className="flex items-center gap-2 titlebar-nodrag">
@@ -8,7 +12,7 @@ export default function TitleBar() {
         <span className="text-xs font-semibold text-text-primary tracking-wider uppercase">
           CS2 Farm Panel
         </span>
-        <span className="text-xs text-text-muted">v1.0.0</span>
+        <span className="text-xs text-text-muted">v{version || '...'}</span>
       </div>
 
       <div className="titlebar-nodrag flex items-center">

@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { EventEmitter } from 'events'
 import steamConfigPatcher from './SteamConfigPatcher'
@@ -152,46 +152,67 @@ class CS2Launcher extends EventEmitter {
     return null
   }
 
-  // Вызывается при старте панели — создаёт боксы для всех аккаунтов пока ничего не запущено.
-  // Перезапускает SbieSvc (через UAC) чтобы служба гарантированно подхватила новые боксы из INI.
+  // Проверяет, нужен ли перезапуск SbieSvc:
+  // если Sandboxie.ini изменён ПОСЛЕ запуска службы → служба не знает о новых боксах.
+  _isSandboxieServiceStale() {
+    try {
+      const iniMtime = statSync('C:\\Windows\\Sandboxie.ini').mtimeMs
+      const out = execSync(
+        `powershell -NoProfile -Command "(Get-Process SbieSvc -ErrorAction SilentlyContinue).StartTime.ToFileTime()"`,
+        { encoding: 'utf8', timeout: 5000 }
+      ).trim()
+      if (!out) return true  // служба не запущена → нужно поднять
+      // Windows FileTime: 100-ns тики с 1601-01-01 UTC. Конвертируем в ms с 1970-01-01.
+      const startMs = Number((BigInt(out) - 116444736000000000n) / 10000n)
+      return iniMtime > startMs + 1000  // +1с допуска на разницу часов
+    } catch { return true }
+  }
+
+  // Перезапускает SbieSvc через elevated PowerShell. Бросает если UAC отклонён
+  // ИЛИ если служба не смогла перезапуститься (exit code != 0 из elevated процесса).
+  async _restartSbieSvc() {
+    // -PassThru + проверка ExitCode даёт нам узнать упала ли элевированная операция
+    execSync(
+      `powershell -NoProfile -Command "$p = Start-Process powershell -ArgumentList '-NoProfile','-WindowStyle','Hidden','-Command','try { Stop-Service SbieSvc -Force -ErrorAction Stop; Start-Sleep -Milliseconds 500; Start-Service SbieSvc -ErrorAction Stop; exit 0 } catch { exit 1 }' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"`,
+      { timeout: 60_000 }
+    )
+    await new Promise(r => setTimeout(r, 3000)) // ждём пока служба полностью поднимется
+  }
+
+  // Вызывается при старте панели — создаёт боксы для всех аккаунтов.
   async setupBoxes(accountIds, steamPath, cs2Path) {
     const sbPath = this._findSandboxie()
     if (!sbPath) return
 
-    const { added, ini, encoding } = this._writeBoxesToIni(accountIds, steamPath, cs2Path)
-    if (!added) return  // все боксы уже есть
+    try { this._writeBoxesToIni(accountIds, steamPath, cs2Path) } catch (e) {
+      console.log('[CS2Launcher] setupBoxes write:', e.message)
+      return
+    }
 
-    // Перезапускаем службу Sandboxie — стандартный способ сказать SbieSvc перечитать INI.
-    // Stop-Service + Start-Service через PowerShell с Verb RunAs (UAC).
+    if (!this._isSandboxieServiceStale()) return  // служба уже знает о боксах
+
     try {
-      execSync(
-        `powershell -Command "Start-Process powershell -ArgumentList 'Stop-Service SbieSvc -Force; Start-Service SbieSvc' -Verb RunAs -Wait"`,
-        { timeout: 60_000 }
-      )
-      await new Promise(r => setTimeout(r, 3000)) // ждём пока служба поднимется
+      await this._restartSbieSvc()
     } catch (e) {
-      console.log('[CS2Launcher] setupBoxes: service restart failed:', e.message)
+      console.log('[CS2Launcher] setupBoxes restart failed:', e.message)
     }
   }
 
-  // Проверяет бокс конкретного аккаунта перед запуском.
-  // Если setupBoxes уже отработал при старте — здесь ничего не делается.
+  // Per-launch проверка: гарантирует что бокс существует И служба о нём знает.
   async _configureSandboxBox(sbPath, boxName, steamPath, cs2Path) {
     while (this._iniLock) await new Promise(r => setTimeout(r, 200))
     this._iniLock = true
     try {
-      const { added } = this._writeBoxesToIni([boxName.replace('CS2Bot_', '')], steamPath, cs2Path)
-      if (!added) return  // бокс уже был в INI
+      this._writeBoxesToIni([boxName.replace('CS2Bot_', '')], steamPath, cs2Path)
 
-      // Новый бокс — перезапускаем службу (UAC)
+      // КЛЮЧЕВОЕ: проверяем staleness, а не только "есть ли бокс в INI".
+      // Если UAC был отклонён ранее — бокс в INI, но служба о нём не знает.
+      if (!this._isSandboxieServiceStale()) return
+
       try {
-        execSync(
-          `powershell -Command "Start-Process powershell -ArgumentList 'Stop-Service SbieSvc -Force; Start-Service SbieSvc' -Verb RunAs -Wait"`,
-          { timeout: 60_000 }
-        )
-        await new Promise(r => setTimeout(r, 3000))
-      } catch (e) {
-        throw new Error('Не удалось перезапустить службу Sandboxie. Разреши запрос администратора.')
+        await this._restartSbieSvc()
+      } catch {
+        throw new Error('Не удалось перезапустить службу Sandboxie. Разреши запрос администратора при следующей попытке.')
       }
     } finally {
       this._iniLock = false
