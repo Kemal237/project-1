@@ -1,5 +1,6 @@
 import { ipcMain, dialog, app } from 'electron'
 import { readFileSync } from 'fs'
+import { execSync } from 'child_process'
 import { autoUpdater } from 'electron-updater'
 import accountManager    from './modules/AccountManager'
 import proxyManager      from './modules/ProxyManager'
@@ -128,6 +129,32 @@ export function setupIPC() {
   })
 
   ipcMain.handle('sandboxie:status', () => sandboxieManager.getStatus())
+
+  ipcMain.handle('sandboxie:killAll', async () => {
+    try {
+      // 1. Останавливаем все воркеры (Steam-фарм)
+      await workerManager.stopAll()
+      // 2. Останавливаем все CS2-лаунчеры (Stop.exe для каждого tracked бокса)
+      cs2Launcher.stopAll()
+      // 3. Принудительно убиваем ВСЕ оставшиеся sandboxed процессы через PowerShell
+      //    (имеют SbieDll.dll в памяти — надёжный маркер)
+      try {
+        execSync(
+          `powershell -NoProfile -Command "Get-Process -EA SilentlyContinue | Where-Object { try { $_.Modules.ModuleName -contains 'SbieDll.dll' } catch { $false } } | Stop-Process -Force -EA SilentlyContinue"`,
+          { timeout: 20_000, stdio: 'pipe' }
+        )
+      } catch {}
+      // 4. Сбрасываем статусы всех аккаунтов в idle
+      const accounts = accountManager.getAll()
+      accountManager.resetStatuses()
+      for (const a of accounts) {
+        workerManager.webContents?.send('worker:statusChange', { accountId: a.id, status: 'idle' })
+      }
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  })
 
   ipcMain.handle('sandboxie:uninstall', async () => {
     try { sandboxieManager.uninstall(); return { ok: true } }

@@ -86,6 +86,7 @@ contextBridge.exposeInMainWorld('api', {
     status:     ()    => ipcRenderer.invoke('sandboxie:status'),
     install:    ()    => ipcRenderer.invoke('sandboxie:install'),
     uninstall:  ()    => ipcRenderer.invoke('sandboxie:uninstall'),
+    killAll:    ()    => ipcRenderer.invoke('sandboxie:killAll'),
     onProgress: (cb)  => {
       ipcRenderer.removeAllListeners('sandboxie:progress')
       ipcRenderer.on('sandboxie:progress', (_, msg) => cb(msg))
