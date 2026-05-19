@@ -65,13 +65,17 @@ class CS2Launcher extends EventEmitter {
       this._cleanBoxState(sbPath, boxName)
       await new Promise(r => setTimeout(r, 800))
 
-      onStatus('cs2_launching', 'Запуск Steam в боксе...')
+      onStatus('steam_launching', 'Запуск Steam...')
       this._spawnInBox(sbPath, boxName, steamPath, [
         '-login', creds.login, creds.password,
         '-noreactlogin',
       ])
 
       await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
+      onStatus('steam_running', 'Steam запущен, авторизация...')
+
+      // Даём Steam время войти в аккаунт перед запуском CS2
+      await new Promise(r => setTimeout(r, 5000))
 
       onStatus('cs2_launching', 'Запуск CS2...')
       this._patchCS2VideoSettings(cs2Path)
@@ -87,7 +91,7 @@ class CS2Launcher extends EventEmitter {
       // Ждём пока CS2 загрузит интро и дойдёт до главного меню
       await this._waitForProcess('cs2', CS2_LOBBY_WAIT_MS + 10_000, CS2_POLL_MS, CS2_LOBBY_WAIT_MS)
 
-      onStatus('cs2_lobby', 'CS2 запущен — в лобби')
+      onStatus('cs2_lobby', 'В лобби CS2')
 
       // Мониторим cs2.exe — когда закрывается, сбрасываем статус
       this._monitorProcess(accountId, 'cs2', () => onStatus('idle', ''))
@@ -257,8 +261,15 @@ class CS2Launcher extends EventEmitter {
 
     const steamAppsPath = join(steamPath, 'steamapps')
     const csgoPath      = join(cs2Path,   'game')
+    const loginusersVdf = join(steamPath, 'config', 'loginusers.vdf')
+    const configVdf     = join(steamPath, 'config', 'config.vdf')
+    const ssfnGlob      = join(steamPath, 'ssfn*')
 
-    // set перезаписывает single-value; append добавляет в multi-value (skips если уже есть)
+    // set перезаписывает single-value; append добавляет в multi-value (skips если уже есть).
+    // ВАЖНО: OpenKeyPath HKCU\Software\Valve УБРАН — давал boxed Steam прямой
+    // доступ к реестру с креденшалами хоста, из-за чего входило в чужой аккаунт.
+    // ClosedFilePath блокирует boxed Steam от чтения cached login файлов хоста
+    // (loginusers.vdf, config.vdf, ssfn* токены Steam Guard).
     const ops = [
       ['set',    'Enabled',                'y'],
       ['set',    'AutoRecover',            'n'],
@@ -266,12 +277,26 @@ class CS2Launcher extends EventEmitter {
       ['append', 'OpenFilePath',           steamAppsPath],
       ['append', 'OpenFilePath',           csgoPath],
       ['append', 'OpenKeyPath',            'HKLM\\Software\\Valve'],
-      ['append', 'OpenKeyPath',            'HKCU\\Software\\Valve'],
       ['append', 'OpenPipePath',           '\\Device\\NamedPipe\\*'],
+      ['append', 'ClosedFilePath',         loginusersVdf],
+      ['append', 'ClosedFilePath',         configVdf],
+      ['append', 'ClosedFilePath',         ssfnGlob],
     ]
 
     for (const id of accountIds) {
       const boxName = `CS2Bot_${id}`
+
+      // ВАЖНО: удаляем бокс полностью перед пересозданием. Решает SBIE2308
+      // C0000024 для старых боксов с устаревшим/несовместимым конфигом —
+      // когда часть настроек унаследована от прошлых версий панели и
+      // мешает создать object directory.
+      try {
+        execSync(`"${sbieIni}" delete_section "${boxName}"`, {
+          timeout: 10_000,
+          stdio: 'pipe',
+        })
+      } catch {}
+
       for (const [cmd, key, value] of ops) {
         try {
           execSync(`"${sbieIni}" ${cmd} "${boxName}" ${key} "${value}"`, {
@@ -312,8 +337,10 @@ class CS2Launcher extends EventEmitter {
         `OpenFilePath=${join(steamPath, 'steamapps')}`,
         `OpenFilePath=${join(cs2Path, 'game')}`,
         'OpenKeyPath=HKLM\\Software\\Valve',
-        'OpenKeyPath=HKCU\\Software\\Valve',
         'OpenPipePath=\\Device\\NamedPipe\\*',
+        `ClosedFilePath=${join(steamPath, 'config', 'loginusers.vdf')}`,
+        `ClosedFilePath=${join(steamPath, 'config', 'config.vdf')}`,
+        `ClosedFilePath=${join(steamPath, 'ssfn*')}`,
         '',
       ].join('\r\n')
       added = true
