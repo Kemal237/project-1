@@ -6,6 +6,7 @@ const STATUS_BADGE = {
   farming:          'badge-green',
   lobby:            'badge-blue',
   steam_launching:  'badge-yellow',
+  steam_loading:    'badge-yellow',
   steam_running:    'badge-blue',
   cs2_launching:    'badge-yellow',
   cs2_searching:    'badge-yellow',
@@ -27,6 +28,7 @@ const STATUS_LABEL = {
   farming:          'Фармит',
   lobby:            'В лобби',
   steam_launching:  'Запуск Steam',
+  steam_loading:    'Steam загружается',
   steam_running:    'В Steam',
   cs2_launching:    'Запуск CS2',
   cs2_searching:    'Ищет матч',
@@ -45,7 +47,7 @@ const STATUS_LABEL = {
 
 const CS2_STATUSES = new Set(['farming', 'lobby', 'steam_launching', 'steam_running', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_lobby'])
 
-const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'no_prime', 'steam_launching', 'steam_running'])
+const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'no_prime', 'steam_launching', 'steam_loading', 'steam_running'])
 
 function playBeep() {
   try {
@@ -516,7 +518,7 @@ export default function Accounts() {
     setGuardIndex(i => Math.max(0, i - 1))
   }
 
-  const CS2_ACTIVE = new Set(['steam_launching', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby'])
+  const CS2_ACTIVE = new Set(['steam_launching', 'steam_loading', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby'])
 
   const handleStartCS2 = async (id) => { await window.api.launcher.start(id) }
 

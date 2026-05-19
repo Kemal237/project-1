@@ -60,16 +60,17 @@ class CS2Launcher extends EventEmitter {
       onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
       await this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
 
-      // Фикс SBIE2308 "Could not create object directory" — чистим kernel-объекты
-      // от прошлых сессий бокса (даже если процессов нет). Без этого первый запуск
-      // после ребута/переустановки/смены версии Sandboxie может упасть с C0000024.
+      // Фикс SBIE2308 "Could not create object directory"
       this._cleanBoxState(sbPath, boxName)
       await new Promise(r => setTimeout(r, 800))
 
-      // Чистим cached Steam credentials в sandbox-папке бокса. Без этого Steam
-      // при повторном запуске использует cached login (если бокс ранее был
-      // запущен с другим аккаунтом), игнорируя флаг -login.
+      // Чистим cached Steam credentials в sandbox-папке бокса
       this._wipeSandboxCredentials(boxName, steamPath)
+
+      // Фиксируем текущее кол-во sandboxed-процессов ПЕРЕД запуском.
+      // _waitForNewBoxedProcess ждёт count > prevCount — это гарантирует
+      // что мы видим НАШУ копию процесса, а не уже запущенные от других аккаунтов.
+      const prevSteamCount = this._countBoxedProcesses('steam')
 
       onStatus('steam_launching', 'Запуск Steam...')
       this._spawnInBox(sbPath, boxName, steamPath, [
@@ -77,13 +78,18 @@ class CS2Launcher extends EventEmitter {
         '-noreactlogin',
       ])
 
-      await this._waitForProcess('steam', STEAM_TIMEOUT_MS, STEAM_POLL_MS)
+      // Ждём появления нашего sandboxed steam.exe (не хост-Steam и не чужой бокс)
+      await this._waitForNewBoxedProcess('steam', prevSteamCount, STEAM_TIMEOUT_MS, STEAM_POLL_MS,
+        () => onStatus('steam_loading', 'Steam загружается...')
+      )
 
-      // Steam.exe появился, но ещё идёт загрузка (splash screen).
-      // Ждём пока Steam загрузится и авторизуется — только потом меняем статус.
-      await new Promise(r => setTimeout(r, 8000))
+      // Ждём пока Steam авторизуется: userdata/<steamid>/ появляется в sandbox
+      // только после успешного логина. Timeout 90с — продолжаем в любом случае.
+      await this._waitForSteamReady(boxName, steamPath, 90_000)
       onStatus('steam_running', 'Steam авторизован')
-      await new Promise(r => setTimeout(r, 1000))
+
+      // Фиксируем кол-во sandboxed cs2.exe до запуска
+      const prevCs2Count = this._countBoxedProcesses('cs2')
 
       onStatus('cs2_launching', 'Запуск CS2...')
       this._patchCS2VideoSettings(cs2Path)
@@ -91,18 +97,17 @@ class CS2Launcher extends EventEmitter {
         '-applaunch', '730', ...CS2_FLAGS,
       ])
 
-      // Ждём появления cs2.exe → переключаем на "Загрузка"
-      await this._waitForProcess('cs2', CS2_TIMEOUT_MS, CS2_POLL_MS, 0,
+      // Ждём появления НАШЕГО sandboxed cs2.exe
+      await this._waitForNewBoxedProcess('cs2', prevCs2Count, CS2_TIMEOUT_MS, CS2_POLL_MS,
         () => onStatus('cs2_loading', 'CS2 загружается...')
       )
 
-      // Ждём пока CS2 загрузит интро и дойдёт до главного меню
-      await this._waitForProcess('cs2', CS2_LOBBY_WAIT_MS + 10_000, CS2_POLL_MS, CS2_LOBBY_WAIT_MS)
-
+      // Ждём 90с чтобы CS2 загрузился до лобби
+      await new Promise(r => setTimeout(r, CS2_LOBBY_WAIT_MS))
       onStatus('cs2_lobby', 'В лобби CS2')
 
-      // Мониторим cs2.exe — когда закрывается, сбрасываем статус
-      this._monitorProcess(accountId, 'cs2', () => onStatus('idle', ''))
+      // Мониторим: когда sandboxed cs2.exe count опускается ниже prevCs2Count+1 → idle
+      this._monitorBoxedProcess(accountId, 'cs2', prevCs2Count + 1, () => onStatus('idle', ''))
     } catch (e) {
       // Если accountId уже удалён из _active — значит stop() вызван пользователем.
       // Не считаем это ошибкой: процессы убиты намеренно, не нужно ставить status=error.
@@ -124,6 +129,28 @@ class CS2Launcher extends EventEmitter {
     try {
       execSync(`"${join(sbPath, 'Start.exe')}" /box:${boxName} /terminate`, { timeout: 10_000, stdio: 'pipe' })
     } catch {}
+  }
+
+  // Ждёт пока Steam авторизуется: после логина Steam создаёт userdata/<steamid>/
+  // в sandbox-папке бокса. Это надёжный сигнал — появляется только после
+  // УСПЕШНОЙ авторизации, не просто после старта процесса.
+  // При timeout (Steam Guard ожидает код и т.п.) просто продолжаем — CS2 и так запустится.
+  _waitForSteamReady(boxName, steamPath, timeoutMs) {
+    const username     = userInfo().username
+    const driveLetter  = steamPath[0]
+    const restPath     = steamPath.slice(2)
+    const sandboxSteam = `C:\\Sandbox\\${username}\\${boxName}\\drive\\${driveLetter}${restPath}`
+    const userdataDir  = join(sandboxSteam, 'userdata')
+
+    return new Promise(resolve => {
+      const deadline = Date.now() + timeoutMs
+      const check = () => {
+        if (existsSync(userdataDir)) return resolve()
+        if (Date.now() >= deadline) return resolve()  // timeout → продолжаем
+        setTimeout(check, 2000)
+      }
+      check()
+    })
   }
 
   // Удаляет cached Steam credentials из песочной папки бокса.
@@ -497,70 +524,63 @@ class CS2Launcher extends EventEmitter {
     }).unref()
   }
 
-  _monitorProcess(accountId, name, onExit) {
-    const check = () => {
-      if (!this._active.has(accountId)) return // stop() уже вызван
-      try {
-        const out = execSync(
-          `tasklist /FI "IMAGENAME eq ${name}.exe" /NH`,
-          { encoding: 'utf8', timeout: 5000 }
-        )
-        if (out.toLowerCase().includes(`${name}.exe`)) {
-          setTimeout(check, 5000)
-        } else {
-          this._active.delete(accountId)
-          onExit()
-        }
-      } catch {
-        setTimeout(check, 5000)
-      }
-    }
-    setTimeout(check, 5000)
+  // Считает ТОЛЬКО sandboxed процессы (имеют SbieDll.dll в памяти).
+  // Ключевое отличие от tasklist: хост-процессы (host Steam, host CS2) не считаются.
+  _countBoxedProcesses(name) {
+    try {
+      const out = execSync(
+        `powershell -NoProfile -Command "(Get-Process ${name} -EA SilentlyContinue | Where-Object { try { $_.Modules.ModuleName -contains 'SbieDll.dll' } catch { $false } }).Count"`,
+        { encoding: 'utf8', timeout: 8000, stdio: 'pipe' }
+      )
+      return parseInt(out.trim(), 10) || 0
+    } catch { return 0 }
   }
 
-  _waitForProcess(name, timeoutMs, pollMs, stabilityMs = 0, onFound = null) {
-    const isRunning = () => {
-      try {
-        const out = execSync(
-          `tasklist /FI "IMAGENAME eq ${name}.exe" /NH`,
-          { encoding: 'utf8', timeout: 5000 }
-        )
-        return out.toLowerCase().includes(`${name}.exe`)
-      } catch { return false }
-    }
-
+  // Ждёт пока количество sandboxed-процессов превысит prevCount.
+  // Решает "детектирование не того аккаунта": если cs2.exe аккаунта 1 уже запущен
+  // (count=1), мы ждём count=2 чтобы знать что запустился именно наш.
+  _waitForNewBoxedProcess(name, prevCount, timeoutMs, pollMs, onDetected = null) {
     return new Promise((resolve, reject) => {
       let done = false
+      let detected = false
       const deadline = Date.now() + timeoutMs
 
       const check = () => {
         if (done) return
-        if (isRunning()) {
-          onFound?.()  // уведомляем о первом обнаружении процесса
-          onFound = null // вызываем только один раз
-          if (stabilityMs <= 0) {
-            done = true
-            return resolve()
+        const count = this._countBoxedProcesses(name)
+        if (count > prevCount) {
+          if (!detected) {
+            detected = true
+            onDetected?.()
           }
-          setTimeout(() => {
-            if (done) return
-            if (isRunning()) { done = true; return resolve() }
-            if (Date.now() > deadline) {
-              done = true
-              return reject(new Error(`Timeout: ${name}.exe не запустился за ${timeoutMs / 1000}с`))
-            }
-            setTimeout(check, pollMs)
-          }, stabilityMs)
-          return
+          done = true
+          return resolve()
         }
         if (Date.now() > deadline) {
           done = true
-          return reject(new Error(`Timeout: ${name}.exe не запустился за ${timeoutMs / 1000}с`))
+          return reject(new Error(`Timeout: sandboxed ${name}.exe не появился за ${timeoutMs / 1000}с`))
         }
         setTimeout(check, pollMs)
       }
       check()
     })
+  }
+
+  // Мониторит cs2.exe конкретного аккаунта: когда count sandboxed-cs2
+  // опускается ниже launchedCount → наш CS2 закрылся → idle.
+  // launchedCount = кол-во sandboxed cs2.exe в момент когда наш стартовал.
+  _monitorBoxedProcess(accountId, name, launchedCount, onExit) {
+    const check = () => {
+      if (!this._active.has(accountId)) return
+      const count = this._countBoxedProcesses(name)
+      if (count < launchedCount) {
+        this._active.delete(accountId)
+        onExit()
+      } else {
+        setTimeout(check, 5000)
+      }
+    }
+    setTimeout(check, 5000)
   }
 }
 
