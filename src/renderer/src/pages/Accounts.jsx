@@ -169,20 +169,25 @@ function AddAccountModal({ proxies, onSave, onClose }) {
           </div>
           <div>
             <label className="label">maFile <span className="text-text-muted">(необязательно)</span></label>
-            <div className="flex gap-1.5">
-              <div className="input flex-1 text-xs font-mono text-text-muted truncate flex items-center">
+            <div className="relative">
+              <div
+                className="input w-full text-xs font-mono truncate pr-8 cursor-pointer flex items-center"
+                onClick={pickMaFile}
+                title="Выбрать maFile"
+              >
                 {maFileName
                   ? <span className="text-green-400">{maFileName}</span>
-                  : 'Не выбран'}
+                  : <span className="text-text-muted">Не выбран</span>}
               </div>
-              <button className="btn-ghost p-2" onClick={pickMaFile} title="Выбрать maFile">
-                <Smartphone size={13} />
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors"
+                onClick={maFilePath ? () => setMaFilePath(null) : pickMaFile}
+                title={maFilePath ? 'Убрать' : 'Выбрать maFile'}
+              >
+                {maFilePath
+                  ? <Trash2 size={13} className="text-red-400" />
+                  : <Smartphone size={13} />}
               </button>
-              {maFilePath && (
-                <button className="btn-ghost p-2 text-red-400" onClick={() => setMaFilePath(null)} title="Убрать">
-                  <Trash2 size={13} />
-                </button>
-              )}
             </div>
           </div>
           <div>

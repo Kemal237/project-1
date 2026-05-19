@@ -11,6 +11,22 @@ import cs2Launcher        from './modules/CS2Launcher'
 import steamConfigPatcher from './modules/SteamConfigPatcher'
 
 export function setupIPC() {
+  // Создаём боксы Sandboxie для всех известных аккаунтов при старте (пока ничего не запущено).
+  // Служба SbieSvc перезапускается один раз через UAC — надёжный способ подхватить новые боксы.
+  setTimeout(async () => {
+    try {
+      const accounts = accountManager.getAll()
+      if (!accounts.length) return
+      const steamPath = await steamConfigPatcher.detectSteamPath()
+      const cs2Path   = await steamConfigPatcher.detectCS2Path(steamPath)
+      if (steamPath && cs2Path) {
+        await cs2Launcher.setupBoxes(accounts.map(a => a.id), steamPath, cs2Path)
+      }
+    } catch (e) {
+      console.log('[Startup] Sandboxie setupBoxes:', e.message)
+    }
+  }, 5000)
+
   ipcMain.handle('accounts:getAll',    ()           => accountManager.getAll())
   ipcMain.handle('accounts:add',       (_, d)       => accountManager.add(d))
   ipcMain.handle('accounts:update',    (_, id, d)   => accountManager.update(id, d))

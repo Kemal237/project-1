@@ -152,34 +152,70 @@ class CS2Launcher extends EventEmitter {
     return null
   }
 
-  _isSbieCtrlRunning() {
+  // Вызывается при старте панели — создаёт боксы для всех аккаунтов пока ничего не запущено.
+  // Перезапускает SbieSvc (через UAC) чтобы служба гарантированно подхватила новые боксы из INI.
+  async setupBoxes(accountIds, steamPath, cs2Path) {
+    const sbPath = this._findSandboxie()
+    if (!sbPath) return
+
+    const { added, ini, encoding } = this._writeBoxesToIni(accountIds, steamPath, cs2Path)
+    if (!added) return  // все боксы уже есть
+
+    // Перезапускаем службу Sandboxie — стандартный способ сказать SbieSvc перечитать INI.
+    // Stop-Service + Start-Service через PowerShell с Verb RunAs (UAC).
     try {
-      const out = execSync('tasklist /FI "IMAGENAME eq SbieCtrl.exe" /NH', { encoding: 'utf8', timeout: 3000 })
-      return out.toLowerCase().includes('sbiectrl.exe')
-    } catch { return false }
+      execSync(
+        `powershell -Command "Start-Process powershell -ArgumentList 'Stop-Service SbieSvc -Force; Start-Service SbieSvc' -Verb RunAs -Wait"`,
+        { timeout: 60_000 }
+      )
+      await new Promise(r => setTimeout(r, 3000)) // ждём пока служба поднимется
+    } catch (e) {
+      console.log('[CS2Launcher] setupBoxes: service restart failed:', e.message)
+    }
   }
 
+  // Проверяет бокс конкретного аккаунта перед запуском.
+  // Если setupBoxes уже отработал при старте — здесь ничего не делается.
   async _configureSandboxBox(sbPath, boxName, steamPath, cs2Path) {
-    // Ждём если другой аккаунт сейчас пишет INI
     while (this._iniLock) await new Promise(r => setTimeout(r, 200))
     this._iniLock = true
-
     try {
-      const iniPath = 'C:\\Windows\\Sandboxie.ini'
+      const { added } = this._writeBoxesToIni([boxName.replace('CS2Bot_', '')], steamPath, cs2Path)
+      if (!added) return  // бокс уже был в INI
 
-      // BOM-aware read: Sandboxie.ini обычно UTF-16LE с BOM
-      let ini = '', encoding = 'utf16le'
+      // Новый бокс — перезапускаем службу (UAC)
       try {
-        const raw = readFileSync(iniPath)
-        const hasBOM = raw.length >= 2 && raw[0] === 0xFF && raw[1] === 0xFE
-        encoding = hasBOM ? 'utf16le' : 'utf8'
-        ini = raw.toString(encoding)
-        if (ini.charCodeAt(0) === 0xFEFF) ini = ini.slice(1) // убираем BOM-символ из строки
-      } catch {}
+        execSync(
+          `powershell -Command "Start-Process powershell -ArgumentList 'Stop-Service SbieSvc -Force; Start-Service SbieSvc' -Verb RunAs -Wait"`,
+          { timeout: 60_000 }
+        )
+        await new Promise(r => setTimeout(r, 3000))
+      } catch (e) {
+        throw new Error('Не удалось перезапустить службу Sandboxie. Разреши запрос администратора.')
+      }
+    } finally {
+      this._iniLock = false
+    }
+  }
 
-      if (ini.includes(`[${boxName}]`)) return // бокс уже есть
+  // Читает INI, добавляет отсутствующие боксы, записывает обратно.
+  // Возвращает { added: bool } — были ли добавлены новые боксы.
+  _writeBoxesToIni(accountIds, steamPath, cs2Path) {
+    const iniPath = 'C:\\Windows\\Sandboxie.ini'
+    let ini = '', encoding = 'utf16le'
+    try {
+      const raw = readFileSync(iniPath)
+      const hasBOM = raw.length >= 2 && raw[0] === 0xFF && raw[1] === 0xFE
+      encoding = hasBOM ? 'utf16le' : 'utf8'
+      ini = raw.toString(encoding)
+      if (ini.charCodeAt(0) === 0xFEFF) ini = ini.slice(1)
+    } catch {}
 
-      const entry = [
+    let content = ini, added = false
+    for (const id of accountIds) {
+      const boxName = `CS2Bot_${id}`
+      if (content.includes(`[${boxName}]`)) continue
+      content = content.trimEnd() + '\r\n\r\n' + [
         `[${boxName}]`,
         'Enabled=y',
         'AutoRecover=n',
@@ -191,40 +227,24 @@ class CS2Launcher extends EventEmitter {
         'OpenPipePath=\\Device\\NamedPipe\\*',
         '',
       ].join('\r\n')
+      added = true
+    }
 
-      // Записываем с BOM если файл был UTF-16LE
+    if (added) {
       try {
-        const newContent = ini.trimEnd() + '\r\n\r\n' + entry
         if (encoding === 'utf16le') {
           const bom = Buffer.from([0xFF, 0xFE])
-          writeFileSync(iniPath, Buffer.concat([bom, Buffer.from(newContent, 'utf16le')]))
+          writeFileSync(iniPath, Buffer.concat([bom, Buffer.from(content, 'utf16le')]))
         } else {
-          writeFileSync(iniPath, newContent, 'utf8')
+          writeFileSync(iniPath, content, 'utf8')
         }
       } catch (e) {
         if (e.code === 'EPERM') throw new Error('Нет прав на запись Sandboxie.ini. Запусти панель от имени администратора.')
         throw e
       }
-
-      // SbieCtrl.exe /reload работает ТОЛЬКО если SbieCtrl.exe уже запущен:
-      // он ищет окно класса SbieCtrl через FindWindow() и PostMessage — если окна нет,
-      // reload уходит в никуда и SbieSvc никогда не узнаёт об изменении.
-      if (!this._isSbieCtrlRunning()) {
-        spawn(join(sbPath, 'SbieCtrl.exe'), [], { detached: true, stdio: 'ignore' }).unref()
-        // Ждём появления процесса (max 8 секунд)
-        const deadline = Date.now() + 8000
-        while (!this._isSbieCtrlRunning() && Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 400))
-        }
-        await new Promise(r => setTimeout(r, 800)) // доп. время инициализации окна
-      }
-
-      // Теперь SbieCtrl.exe запущен — /reload найдёт его окно и передаст команду SbieSvc
-      try { execSync(`"${join(sbPath, 'SbieCtrl.exe')}" /reload`, { timeout: 5000 }) } catch {}
-      await new Promise(r => setTimeout(r, 1500))
-    } finally {
-      this._iniLock = false
     }
+
+    return { added }
   }
 
   _spawnInBox(sbPath, boxName, steamPath, args) {
