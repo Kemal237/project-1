@@ -71,13 +71,13 @@ export default function AutomationWindow({ accountId }) {
 
   return (
     <div className="h-screen flex flex-col bg-bg-primary text-text-primary">
-      {/* Custom titlebar (frame: false) */}
-      <div className="flex items-center justify-between px-3 py-2 bg-bg-card border-b border-border drag-region">
+      {/* Custom titlebar (frame: false) — draggable */}
+      <div className="flex items-center justify-between px-3 py-2 bg-bg-card border-b border-border titlebar-drag">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Bot size={14} className="text-purple-400" />
           Имитация — {account?.login || `#${accountId}`}
         </div>
-        <div className="flex items-center gap-1 no-drag">
+        <div className="flex items-center gap-1 titlebar-nodrag">
           <button className="btn-ghost p-1" onClick={handleMinimize} title="Свернуть">
             <span className="text-xs">─</span>
           </button>

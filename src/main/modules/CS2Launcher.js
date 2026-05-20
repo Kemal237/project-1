@@ -96,8 +96,15 @@ class CS2Launcher extends EventEmitter {
 
       // Ждём пока Steam авторизуется: userdata/<steamid>/ появляется в sandbox
       // только после успешного логина. Timeout 90с — продолжаем в любом случае.
+      // Минимум 1.2с на статус steam_loading чтобы пользователь его увидел
+      // (с кэшированными credentials userdata появляется почти мгновенно).
+      const steamReadyStart = Date.now()
       await this._waitForSteamReady(boxName, steamPath, 90_000)
+      const elapsed = Date.now() - steamReadyStart
+      if (elapsed < 1200) await new Promise(r => setTimeout(r, 1200 - elapsed))
       onStatus('steam_running', 'Steam авторизован')
+      // Дать пользователю увидеть steam_running перед переходом к cs2_launching
+      await new Promise(r => setTimeout(r, 1200))
 
       // Извлекаем SteamID из sandbox loginusers.vdf и сохраняем в БД для GSI routing.
       // Это покрывает аккаунты которые никогда не делали Farm Start (только Launch CS2).

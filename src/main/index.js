@@ -130,9 +130,14 @@ app.whenReady().then(async () => {
   const win = createWindow()
   workerManager.init(win.webContents)
   botAutomation.init(win.webContents)
-  ipcMain.on('window:minimize', () => win.minimize())
-  ipcMain.on('window:maximize', () => win.isMaximized() ? win.unmaximize() : win.maximize())
-  ipcMain.on('window:close',    () => win.close())
+  // window:* events — действуют на окно из которого пришёл event (главное ИЛИ автоматизации)
+  ipcMain.on('window:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
+  ipcMain.on('window:maximize', (e) => {
+    const w = BrowserWindow.fromWebContents(e.sender)
+    if (!w) return
+    w.isMaximized() ? w.unmaximize() : w.maximize()
+  })
+  ipcMain.on('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   setupIPC()
 
   // GSI HTTP сервер для приёма state events от CS2.

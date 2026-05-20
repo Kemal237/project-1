@@ -2,6 +2,7 @@ import { execSync } from 'child_process'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { BrowserWindow } from 'electron'
 import { keyboard, Key } from '@nut-tree-fork/nut-js'
 import cs2Launcher from './CS2Launcher'
 
@@ -166,7 +167,13 @@ class BotAutomation {
   }
 
   _sendEvent(payload) {
-    this.webContents?.send('automation:action', payload)
+    // Broadcast на ВСЕ окна — events нужны и главному окну, и окну имитации
+    // (которое имеет свой webContents). Иначе events приходят только в одно окно.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('automation:action', payload)
+      }
+    }
   }
 
   async _runLoop(accountId) {
