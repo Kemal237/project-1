@@ -146,10 +146,10 @@ class CS2Launcher extends EventEmitter {
   // того же имени но другого типа (или с другими permissions).
   _cleanBoxState(sbPath, boxName) {
     try {
-      execSync(`"${join(sbPath, 'Stop.exe')}" /box:${boxName}`, { timeout: 10_000, stdio: 'pipe' })
+      execSync(`"${join(sbPath, 'Stop.exe')}" /box:${boxName}`, { timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
     } catch {}
     try {
-      execSync(`"${join(sbPath, 'Start.exe')}" /box:${boxName} /terminate`, { timeout: 10_000, stdio: 'pipe' })
+      execSync(`"${join(sbPath, 'Start.exe')}" /box:${boxName} /terminate`, { timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
     } catch {}
   }
 
@@ -215,14 +215,14 @@ class CS2Launcher extends EventEmitter {
     try {
       execSync(
         `"${join(entry.sbPath, 'Stop.exe')}" /box:${entry.boxName}`,
-        { timeout: 15_000 }
+        { timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] }
       )
     } catch {
       // Stop.exe не сработал — принудительно через Start.exe /terminate
       try {
         execSync(
           `"${join(entry.sbPath, 'Start.exe')}" /box:${entry.boxName} /terminate`,
-          { timeout: 10_000 }
+          { timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] }
         )
       } catch (e2) {
         console.log('[CS2Launcher] Sandbox termination failed:', e2.message)
@@ -381,7 +381,7 @@ class CS2Launcher extends EventEmitter {
       const iniMtime = statSync('C:\\Windows\\Sandboxie.ini').mtimeMs
       const out = execSync(
         `powershell -NoProfile -Command "(Get-Process SbieSvc -ErrorAction SilentlyContinue).StartTime.ToFileTime()"`,
-        { encoding: 'utf8', timeout: 5000 }
+        { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
       ).trim()
       if (!out) return true  // служба не запущена → нужно поднять
       // Windows FileTime: 100-ns тики с 1601-01-01 UTC. Конвертируем в ms с 1970-01-01.
@@ -396,7 +396,7 @@ class CS2Launcher extends EventEmitter {
     // -PassThru + проверка ExitCode даёт нам узнать упала ли элевированная операция
     execSync(
       `powershell -NoProfile -Command "$p = Start-Process powershell -ArgumentList '-NoProfile','-WindowStyle','Hidden','-Command','try { Stop-Service SbieSvc -Force -ErrorAction Stop; Start-Sleep -Milliseconds 500; Start-Service SbieSvc -ErrorAction Stop; exit 0 } catch { exit 1 }' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"`,
-      { timeout: 60_000 }
+      { timeout: 60_000, stdio: ['ignore', 'pipe', 'ignore'] }
     )
     await new Promise(r => setTimeout(r, 3000)) // ждём пока служба полностью поднимется
   }
@@ -453,10 +453,10 @@ class CS2Launcher extends EventEmitter {
     // 2. Остановить и удалить каждый бокс
     for (const box of boxNames) {
       try {
-        execSync(`"${join(sbPath, 'Stop.exe')}" /box:${box}`, { timeout: 10_000, stdio: 'pipe' })
+        execSync(`"${join(sbPath, 'Stop.exe')}" /box:${box}`, { timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
       } catch {}
       try {
-        execSync(`"${join(sbPath, 'Start.exe')}" /box:${box} /terminate`, { timeout: 10_000, stdio: 'pipe' })
+        execSync(`"${join(sbPath, 'Start.exe')}" /box:${box} /terminate`, { timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
       } catch {}
     }
 
@@ -565,54 +565,25 @@ class CS2Launcher extends EventEmitter {
     for (const id of accountIds) {
       const boxName = `CS2Bot_${id}`
 
-      // SKIP если бокс уже настроен правильно (наш steamAppsPath в OpenFilePath).
-      // Избавляет от лишних 14 PowerShell вызовов на бокс при каждом старте панели.
-      if (this._isBoxAlreadyConfigured(sbieIni, boxName, steamAppsPath)) {
-        continue
-      }
-
-      // ВАЖНО: удаляем бокс полностью перед пересозданием. Решает SBIE2308
-      // C0000024 для старых боксов с устаревшим/несовместимым конфигом —
-      // когда часть настроек унаследована от прошлых версий панели и
-      // мешает создать object directory.
-      try {
-        execSync(`"${sbieIni}" delete_section "${boxName}"`, {
-          timeout: 10_000,
-          stdio: 'pipe',
-        })
-      } catch {}
-
+      // Идемпотентный подход: set/append всегда, без delete_section.
+      // - set Enabled y → no-op если уже y
+      // - append OpenFilePath "..." → skip если значение уже в multi-value
+      // Это НЕ пересоздание бокса — sandbox файлы (loginusers.vdf и т.п.) остаются.
+      // Гарантирует что все необходимые ключи присутствуют (в т.ч. MsiInstallerExemptions
+      // нужный для Steam Client Service — без него SBIE2331 Access Denied).
       for (const [cmd, key, value] of ops) {
         try {
           execSync(`"${sbieIni}" ${cmd} "${boxName}" ${key} "${value}"`, {
             timeout: 10_000,
-            stdio: 'pipe',
+            stdio: ['ignore', 'pipe', 'ignore'],
           })
         } catch (e) {
           console.log(`[CS2Launcher] SbieIni ${cmd} ${boxName} ${key}: ${e.message}`)
           return false
         }
       }
-      console.log(`[CS2Launcher] Box ${boxName} created/reconfigured`)
     }
     return true
-  }
-
-  // Проверяет настроен ли бокс с актуальным конфигом — ищет наш steamapps в OpenFilePath.
-  // SbieIni.exe query <box> <key> возвращает значение(я) ключа или ошибку если нет.
-  _isBoxAlreadyConfigured(sbieIni, boxName, steamAppsPath) {
-    try {
-      const out = execSync(`"${sbieIni}" query "${boxName}" OpenFilePath`, {
-        encoding: 'utf8',
-        timeout:  5000,
-        stdio:    ['ignore', 'pipe', 'pipe'],
-      })
-      // Нормализуем пути для сравнения (case-insensitive, slashes)
-      const haveSteam = out.toLowerCase().includes(steamAppsPath.toLowerCase())
-      return haveSteam
-    } catch {
-      return false  // бокса нет или query не сработал → пересоздаём
-    }
   }
 
   // Читает INI, добавляет отсутствующие боксы, записывает обратно.
@@ -681,7 +652,7 @@ class CS2Launcher extends EventEmitter {
     try {
       const out = execSync(
         `powershell -NoProfile -Command "(Get-Process ${name} -EA SilentlyContinue | Where-Object { try { $_.Modules.ModuleName -contains 'SbieDll.dll' } catch { $false } }).Count"`,
-        { encoding: 'utf8', timeout: 8000, stdio: 'pipe' }
+        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] }
       )
       return parseInt(out.trim(), 10) || 0
     } catch { return 0 }

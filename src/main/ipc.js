@@ -161,7 +161,7 @@ export function setupIPC() {
       try {
         execSync(
           `powershell -NoProfile -Command "Get-Process -EA SilentlyContinue | Where-Object { try { $_.Modules.ModuleName -contains 'SbieDll.dll' } catch { $false } } | Stop-Process -Force -EA SilentlyContinue"`,
-          { timeout: 20_000, stdio: 'pipe' }
+          { timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'] }
         )
       } catch {}
       // 4. Сбрасываем статусы всех аккаунтов в idle

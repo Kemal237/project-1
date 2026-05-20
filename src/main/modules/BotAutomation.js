@@ -248,7 +248,7 @@ class BotAutomation {
     try {
       const out = execSync(
         `powershell -NoProfile -Command "Get-Process cs2 -EA SilentlyContinue | Where-Object { try { $_.Modules.ModuleName -contains 'SbieDll.dll' } catch { $false } } | Select-Object -ExpandProperty Id"`,
-        { encoding: 'utf8', timeout: 8000 }
+        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] }
       ).trim()
       if (!out) return null
       const pids = out.split(/\s+/).map(Number).filter(Boolean)
@@ -265,7 +265,7 @@ class BotAutomation {
     try {
       const out = execSync(
         `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}" -TargetPid ${pid}`,
-        { encoding: 'utf8', timeout: 8000 }
+        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] }
       ).trim()
       const hwnd = Number(out)
       return isNaN(hwnd) ? 0 : hwnd
@@ -281,7 +281,7 @@ class BotAutomation {
     try {
       const out = execSync(
         `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}" -Hwnd ${hwnd}`,
-        { encoding: 'utf8', timeout: 5000 }
+        { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
       ).trim()
       return out === 'OK'
     } catch (e) {
