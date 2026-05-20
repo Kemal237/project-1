@@ -76,7 +76,13 @@ export class SteamWorker extends EventEmitter {
       }
 
       this._retries = 0
-      console.log(`[SteamWorker ${this.accountId}] logged in as SteamID: ${client.steamID?.getSteamID64?.() ?? client.steamID}`)
+      const steamId64 = client.steamID?.getSteamID64?.()
+      console.log(`[SteamWorker ${this.accountId}] logged in as SteamID: ${steamId64 ?? client.steamID}`)
+      if (steamId64) {
+        try { accountManager.update(this.accountId, { steamId: steamId64 }) } catch (e) {
+          console.log(`[SteamWorker ${this.accountId}] save steamId failed:`, e.message)
+        }
+      }
       this._setupClientEvents()
     } catch (err) {
       if (this._stopped) return

@@ -161,6 +161,8 @@ class Database {
       this.db.run('ALTER TABLE accounts ADD COLUMN windows_user TEXT')
     if (!cols.includes('windows_password_enc'))
       this.db.run('ALTER TABLE accounts ADD COLUMN windows_password_enc TEXT')
+    if (!cols.includes('steam_id'))
+      this.db.run('ALTER TABLE accounts ADD COLUMN steam_id TEXT')
 
     const launcherDefaults = { steam_path: '', cs2_path: '' }
     for (const [k, v] of Object.entries(launcherDefaults))

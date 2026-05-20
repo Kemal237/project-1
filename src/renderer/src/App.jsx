@@ -9,6 +9,7 @@ import FarmGroups  from './pages/FarmGroups'
 import Drops       from './pages/Drops'
 import Proxies     from './pages/Proxies'
 import Settings    from './pages/Settings'
+import AutomationWindow from './pages/AutomationWindow'
 
 const PAGES = {
   dashboard:  Dashboard,
@@ -19,7 +20,21 @@ const PAGES = {
   settings:   Settings,
 }
 
+// Standalone-окно имитации: URL hash `#/automation/<accountId>` → отдельный режим UI.
+// Используется openAutomationWindow() в main process.
+function getAutomationAccountId() {
+  const hash = window.location.hash || ''
+  const m = hash.match(/^#\/automation\/(\d+)$/)
+  return m ? m[1] : null
+}
+
 export default function App() {
+  const automationId = getAutomationAccountId()
+  if (automationId) return <AutomationWindow accountId={automationId} />
+  return <MainApp />
+}
+
+function MainApp() {
   const [page, setPage]           = useState('dashboard')
   const [setupDone, setSetupDone] = useState(false)
   const [updateInfo, setUpdateInfo] = useState(null)
@@ -27,7 +42,6 @@ export default function App() {
 
   useEffect(() => {
     window.api.updater.onAvailable(info => setUpdateInfo(info))
-    // Listener persists for app lifetime — no cleanup needed
   }, [])
 
   return (

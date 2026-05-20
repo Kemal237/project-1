@@ -4,6 +4,8 @@ import { join } from 'path'
 import { userInfo } from 'os'
 import { EventEmitter } from 'events'
 import steamConfigPatcher from './SteamConfigPatcher'
+import accountManager from './AccountManager'
+import gsiServer from './CS2GSIServer'
 
 const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
@@ -88,11 +90,21 @@ class CS2Launcher extends EventEmitter {
       await this._waitForSteamReady(boxName, steamPath, 90_000)
       onStatus('steam_running', 'Steam авторизован')
 
+      // Извлекаем SteamID из sandbox loginusers.vdf и сохраняем в БД для GSI routing.
+      // Это покрывает аккаунты которые никогда не делали Farm Start (только Launch CS2).
+      try { this._extractAndSaveSteamId(accountId, boxName, steamPath) } catch (e) {
+        console.log('[CS2Launcher] steamId extraction:', e.message)
+      }
+
       // Фиксируем кол-во sandboxed cs2.exe до запуска
       const prevCs2Count = this._countBoxedProcesses('cs2')
 
       onStatus('cs2_launching', 'Запуск CS2...')
       this._patchCS2VideoSettings(cs2Path)
+      // GSI config файл — один раз, виден всем боксам через OpenFilePath steamapps.
+      try { this._writeGsiConfig(cs2Path) } catch (e) {
+        console.log('[CS2Launcher] GSI cfg write:', e.message)
+      }
       this._spawnInBox(sbPath, boxName, steamPath, [
         '-applaunch', '730', ...CS2_FLAGS,
       ])
@@ -210,6 +222,63 @@ class CS2Launcher extends EventEmitter {
 
   stopAll() {
     for (const id of [...this._active.keys()]) this.stop(id)
+  }
+
+  // Парсит loginusers.vdf из sandbox-папки Steam после успешного логина
+  // и сохраняет SteamID64 в БД (для маршрутизации GSI events по SteamID).
+  // Steam VDF format: { "users" { "<steamid64>" { ... } } }
+  _extractAndSaveSteamId(accountId, boxName, steamPath) {
+    const username     = userInfo().username
+    const driveLetter  = steamPath[0]
+    const restPath     = steamPath.slice(2)
+    const sandboxSteam = `C:\\Sandbox\\${username}\\${boxName}\\drive\\${driveLetter}${restPath}`
+    const vdfPath      = join(sandboxSteam, 'config', 'loginusers.vdf')
+
+    if (!existsSync(vdfPath)) return
+
+    const content = readFileSync(vdfPath, 'utf8')
+    // Ищем первый 17-значный SteamID64 (формат "76561198XXXXXXXXX")
+    const m = content.match(/"(7656\d{13})"/)
+    if (!m) return
+
+    const steamId64 = m[1]
+    accountManager.update(accountId, { steamId: steamId64 })
+    console.log(`[CS2Launcher ${accountId}] saved steamId from sandbox: ${steamId64}`)
+  }
+
+  // Пишет GSI config файл в CS2 cfg-папку. CS2 шлёт state на uri при каждом
+  // обновлении (heartbeat 30с в меню, 0.1-0.5с в игре). Один файл виден всем
+  // боксам через OpenFilePath steamapps. Не перезаписывает существующий файл —
+  // пользователь мог настроить вручную.
+  _writeGsiConfig(cs2Path) {
+    const cfgDir  = join(cs2Path, 'game', 'csgo', 'cfg')
+    const cfgFile = join(cfgDir, 'gamestate_integration_botpanel.cfg')
+
+    if (existsSync(cfgFile)) return  // уже есть — не трогаем
+
+    const port = gsiServer.port || 7779
+    const content =
+`"Bot Panel GSI v1.0"
+{
+\t"uri"       "http://127.0.0.1:${port}/"
+\t"timeout"   "5.0"
+\t"buffer"    "0.1"
+\t"throttle"  "0.5"
+\t"heartbeat" "30.0"
+\t"data"
+\t{
+\t\t"provider"            "1"
+\t\t"map"                 "1"
+\t\t"round"               "1"
+\t\t"player_id"           "1"
+\t\t"player_state"        "1"
+\t\t"player_match_stats"  "1"
+\t}
+}
+`
+    mkdirSync(cfgDir, { recursive: true })
+    writeFileSync(cfgFile, content, 'utf8')
+    console.log(`[CS2Launcher] GSI cfg written: ${cfgFile} (port ${port})`)
   }
 
   _patchCS2VideoSettings(cs2Path) {

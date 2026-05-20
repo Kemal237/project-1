@@ -97,6 +97,17 @@ contextBridge.exposeInMainWorld('api', {
     start: (accountId) => ipcRenderer.invoke('launcher:start', accountId),
     stop:  (accountId) => ipcRenderer.invoke('launcher:stop',  accountId),
   },
+  automation: {
+    start:      (accountId, pattern) => ipcRenderer.invoke('automation:start', accountId, pattern),
+    stop:       (accountId)          => ipcRenderer.invoke('automation:stop', accountId),
+    status:     (accountId)          => ipcRenderer.invoke('automation:status', accountId),
+    openWindow: (accountId)          => ipcRenderer.invoke('automation:openWindow', accountId),
+    onAction: (cb) => {
+      ipcRenderer.removeAllListeners('automation:action')
+      ipcRenderer.on('automation:action', (_, d) => cb(d))
+    },
+    offAction: () => ipcRenderer.removeAllListeners('automation:action'),
+  },
   dialog: {
     openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
     openMaFile: () => ipcRenderer.invoke('dialog:openMaFile'),

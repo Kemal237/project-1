@@ -6,6 +6,62 @@ import db from './modules/Database'
 import accountManager from './modules/AccountManager'
 import workerManager from './modules/WorkerManager'
 import settings from './modules/Settings'
+import gsiServer from './modules/CS2GSIServer'
+import botAutomation from './modules/BotAutomation'
+
+// Отдельное окно для имитации движения — удобнее чем модалка когда
+// пользователь возится с CS2 рядом. Один accountId = одно окно (повторный
+// вызов фокусирует существующее).
+const _automationWindows = new Map()
+function openAutomationWindow(accountId) {
+  const existing = _automationWindows.get(accountId)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return existing
+  }
+  const win = new BrowserWindow({
+    width: 460,
+    height: 560,
+    minWidth: 420,
+    minHeight: 480,
+    frame: false,
+    backgroundColor: '#0d1117',
+    title: `Имитация — #${accountId}`,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  })
+
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+    ?.replace('localhost', '127.0.0.1')
+  const url = devUrl
+    ? `${devUrl}#/automation/${accountId}`
+    : `file://${join(__dirname, '../renderer/index.html')}#/automation/${accountId}`
+
+  if (devUrl) {
+    const tryLoad = (attempts) => {
+      win.loadURL(url).catch(() => {
+        if (attempts > 0) setTimeout(() => tryLoad(attempts - 1), 500)
+      })
+    }
+    setTimeout(() => tryLoad(20), 200)
+  } else {
+    win.loadURL(url)
+  }
+
+  win.webContents.on('before-input-event', (_, input) => {
+    if ((input.control && input.shift && input.key === 'I') || input.key === 'F12') {
+      win.webContents.toggleDevTools()
+    }
+  })
+
+  win.on('closed', () => _automationWindows.delete(accountId))
+  _automationWindows.set(accountId, win)
+  return win
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -73,10 +129,21 @@ app.whenReady().then(async () => {
 
   const win = createWindow()
   workerManager.init(win.webContents)
+  botAutomation.init(win.webContents)
   ipcMain.on('window:minimize', () => win.minimize())
   ipcMain.on('window:maximize', () => win.isMaximized() ? win.unmaximize() : win.maximize())
   ipcMain.on('window:close',    () => win.close())
   setupIPC()
+
+  // GSI HTTP сервер для приёма state events от CS2.
+  // CS2 шлёт POST по URI из gamestate_integration_botpanel.cfg (cfg создаётся в CS2Launcher.start).
+  gsiServer.ensure().catch(e => console.log('[GSI] start failed:', e.message))
+
+  // Окно имитации — открывается отдельным BrowserWindow для удобной работы рядом с CS2.
+  ipcMain.handle('automation:openWindow', (_, accountId) => {
+    openAutomationWindow(accountId)
+    return { ok: true }
+  })
 
   if (app.isPackaged) {
     autoUpdater.autoDownload = false

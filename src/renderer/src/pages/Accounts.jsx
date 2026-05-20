@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight, Gamepad2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight, Gamepad2, ChevronLeft, ChevronRight, Bot } from 'lucide-react'
 
 const STATUS_BADGE = {
   online:           'badge-green',
@@ -11,7 +11,9 @@ const STATUS_BADGE = {
   cs2_launching:    'badge-yellow',
   cs2_searching:    'badge-yellow',
   cs2_loading:      'badge-yellow',
+  cs2_match_loading:'badge-yellow',
   cs2_match:        'badge-green',
+  cs2_in_match:     'badge-green',
   cs2_lobby:        'badge-blue',
   connecting:       'badge-yellow',
   reconnecting:     'badge-yellow',
@@ -33,7 +35,9 @@ const STATUS_LABEL = {
   cs2_launching:    'Запуск CS2',
   cs2_searching:    'Ищет матч',
   cs2_loading:      'CS2 загружается',
+  cs2_match_loading:'Загрузка матча',
   cs2_match:        'В матче',
+  cs2_in_match:     'В матче',
   cs2_lobby:        'В лобби',
   connecting:       'Подключение...',
   reconnecting:     'Реконнект...',
@@ -45,7 +49,7 @@ const STATUS_LABEL = {
   awaiting_guard:   'Введи код',
 }
 
-const CS2_STATUSES = new Set(['farming', 'lobby', 'steam_launching', 'steam_running', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_lobby'])
+const CS2_STATUSES = new Set(['farming', 'lobby', 'steam_launching', 'steam_running', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_match_loading', 'cs2_in_match', 'cs2_lobby'])
 
 const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'no_prime', 'steam_launching', 'steam_loading', 'steam_running'])
 
@@ -518,7 +522,7 @@ export default function Accounts() {
     setGuardIndex(i => Math.max(0, i - 1))
   }
 
-  const CS2_ACTIVE = new Set(['steam_launching', 'steam_loading', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby'])
+  const CS2_ACTIVE = new Set(['steam_launching', 'steam_loading', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
 
   const handleStartCS2 = async (id) => { await window.api.launcher.start(id) }
 
@@ -747,6 +751,11 @@ export default function Accounts() {
                           <Gamepad2 size={13} className="text-blue-400" />
                         </button>
                       )}
+                      <button className="btn-ghost p-1.5"
+                        title="Имитация движения (откроется отдельное окно)"
+                        onClick={() => window.api.automation.openWindow(a.id)}>
+                        <Bot size={13} className="text-purple-400" />
+                      </button>
                       <button className="btn-ghost p-1.5" title="Редактировать" onClick={() => setEditId(a.id)}>
                         <Pencil size={13} className="text-text-muted" />
                       </button>

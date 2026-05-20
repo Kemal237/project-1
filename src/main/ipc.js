@@ -10,6 +10,7 @@ import workerManager     from './modules/WorkerManager'
 import sandboxieManager    from './modules/SandboxieManager'
 import cs2Launcher        from './modules/CS2Launcher'
 import steamConfigPatcher from './modules/SteamConfigPatcher'
+import botAutomation     from './modules/BotAutomation'
 
 export function setupIPC() {
   // Создаём боксы Sandboxie для всех известных аккаунтов при старте (пока ничего не запущено).
@@ -108,11 +109,28 @@ export function setupIPC() {
   })
 
   ipcMain.handle('launcher:stop', async (_, accountId) => {
+    botAutomation.stop(accountId)
     cs2Launcher.stop(accountId)
     accountManager.update(accountId, { status: 'idle' })
     workerManager.webContents?.send('worker:statusChange', { accountId, status: 'idle' })
     return { ok: true }
   })
+
+  ipcMain.handle('automation:start', async (_, accountId, pattern) => {
+    try {
+      await botAutomation.start(accountId, pattern)
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  })
+  ipcMain.handle('automation:stop', async (_, accountId) => {
+    botAutomation.stop(accountId)
+    return { ok: true }
+  })
+  ipcMain.handle('automation:status', (_, accountId) => ({
+    running: botAutomation.isRunning(accountId),
+  }))
 
   ipcMain.handle('updater:getVersion', () => app.getVersion())
   ipcMain.handle('updater:check',     () => app.isPackaged ? autoUpdater.checkForUpdates() : null)
@@ -132,6 +150,8 @@ export function setupIPC() {
 
   ipcMain.handle('sandboxie:killAll', async () => {
     try {
+      // 0. Останавливаем все имитации (циклы в BotAutomation)
+      botAutomation.stopAll()
       // 1. Останавливаем все воркеры (Steam-фарм)
       await workerManager.stopAll()
       // 2. Останавливаем все CS2-лаунчеры (Stop.exe для каждого tracked бокса)

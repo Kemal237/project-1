@@ -1,6 +1,6 @@
 {
   "name": "cs2-farm-panel",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "CS2 Case Farm Panel",
   "author": "Kemal237",
   "main": "out/main/index.js",
@@ -9,7 +9,8 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder --win --dir",
-    "release": "npm run build && electron-builder --win --publish always"
+    "release": "npm run build && electron-builder --win --publish always",
+    "postinstall": "electron-builder install-app-deps"
   },
   "build": {
     "appId": "com.kemal237.cs2farmpanel",
@@ -25,7 +26,9 @@
       "package.json"
     ],
     "asarUnpack": [
-      "**/node_modules/sql.js/dist/*.wasm"
+      "**/node_modules/sql.js/dist/*.wasm",
+      "**/node_modules/@nut-tree-fork/**/*.node",
+      "**/node_modules/@nut-tree-fork/libnut-win32/build/Release/**"
     ],
     "win": {
       "target": {

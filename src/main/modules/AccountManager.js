@@ -6,7 +6,7 @@ class AccountManager {
       SELECT a.id, a.login, a.proxy_id, a.status, a.xp_progress,
              a.drops_total, a.drops_this_week, a.last_drop_at, a.last_login_at,
              a.is_prime, a.is_limited, a.warmup_week, a.notes, a.created_at,
-             a.shared_secret_enc, a.identity_secret_enc,
+             a.shared_secret_enc, a.identity_secret_enc, a.steam_id,
              p.host AS proxy_host, p.port AS proxy_port,
              p.username AS proxy_user, p.type AS proxy_type, p.is_valid AS proxy_valid
       FROM accounts a LEFT JOIN proxies p ON a.proxy_id = p.id
@@ -17,7 +17,7 @@ class AccountManager {
       dropsThisWeek: r.drops_this_week, lastDropAt: r.last_drop_at,
       lastLoginAt: r.last_login_at, isPrime: !!r.is_prime,
       isLimited: !!r.is_limited, warmupWeek: r.warmup_week,
-      notes: r.notes, createdAt: r.created_at,
+      notes: r.notes, createdAt: r.created_at, steamId: r.steam_id || null,
       hasSharedSecret:   !!db.decrypt(r.shared_secret_enc),
       hasIdentitySecret: !!db.decrypt(r.identity_secret_enc),
       proxy: r.proxy_host ? {
@@ -55,6 +55,7 @@ class AccountManager {
       isLimited:      ['is_limited',          v => v ? 1 : 0],
       warmupWeek:     ['warmup_week',         v => v],
       notes:          ['notes',               v => v],
+      steamId:        ['steam_id',            v => v ? String(v) : null],
     }
     const fields = [], values = []
     for (const [key, [col, fn]] of Object.entries(map))
@@ -112,6 +113,12 @@ class AccountManager {
   incrementDrop(id) {
     db.run(`UPDATE accounts SET drops_total = drops_total + 1, drops_this_week = drops_this_week + 1,
             last_drop_at = datetime('now') WHERE id = ?`, [id])
+  }
+
+  getBySteamId(steamId64) {
+    if (!steamId64) return null
+    const r = db.get('SELECT id, login, status FROM accounts WHERE steam_id = ?', [String(steamId64)])
+    return r || null
   }
 }
 
