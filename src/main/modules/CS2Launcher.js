@@ -6,6 +6,7 @@ import { EventEmitter } from 'events'
 import steamConfigPatcher from './SteamConfigPatcher'
 import accountManager from './AccountManager'
 import gsiServer from './CS2GSIServer'
+import settings from './Settings'
 
 const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
@@ -59,15 +60,23 @@ class CS2Launcher extends EventEmitter {
       const boxName = `CS2Bot_${accountId}`
       this._active.set(accountId, { boxName, sbPath, steamPath })
 
-      onStatus('cs2_launching', 'Настройка бокса Sandboxie...')
+      onStatus('cs2_preparing', 'Подготовка бокса Sandboxie...')
       await this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
 
       // Фикс SBIE2308 "Could not create object directory"
       this._cleanBoxState(sbPath, boxName)
       await new Promise(r => setTimeout(r, 800))
 
-      // Чистим cached Steam credentials в sandbox-папке бокса
-      this._wipeSandboxCredentials(boxName, steamPath)
+      // Чистим cached Steam credentials ТОЛЬКО если в бокс заходит другой логин
+      // чем в прошлый раз. Если тот же — переиспользуем кэш (быстрый запуск
+      // без повторного Steam Guard каждый раз).
+      const lastLoginKey = `box_last_login_${accountId}`
+      const lastLogin    = settings.get(lastLoginKey)
+      if (lastLogin !== creds.login) {
+        console.log(`[CS2Launcher ${accountId}] wipe credentials (was: ${lastLogin || 'none'}, now: ${creds.login})`)
+        this._wipeSandboxCredentials(boxName, steamPath)
+        settings.set(lastLoginKey, creds.login)
+      }
 
       // Фиксируем текущее кол-во sandboxed-процессов ПЕРЕД запуском.
       // _waitForNewBoxedProcess ждёт count > prevCount — это гарантирует
@@ -507,6 +516,12 @@ class CS2Launcher extends EventEmitter {
     for (const id of accountIds) {
       const boxName = `CS2Bot_${id}`
 
+      // SKIP если бокс уже настроен правильно (наш steamAppsPath в OpenFilePath).
+      // Избавляет от лишних 14 PowerShell вызовов на бокс при каждом старте панели.
+      if (this._isBoxAlreadyConfigured(sbieIni, boxName, steamAppsPath)) {
+        continue
+      }
+
       // ВАЖНО: удаляем бокс полностью перед пересозданием. Решает SBIE2308
       // C0000024 для старых боксов с устаревшим/несовместимым конфигом —
       // когда часть настроек унаследована от прошлых версий панели и
@@ -529,8 +544,26 @@ class CS2Launcher extends EventEmitter {
           return false
         }
       }
+      console.log(`[CS2Launcher] Box ${boxName} created/reconfigured`)
     }
     return true
+  }
+
+  // Проверяет настроен ли бокс с актуальным конфигом — ищет наш steamapps в OpenFilePath.
+  // SbieIni.exe query <box> <key> возвращает значение(я) ключа или ошибку если нет.
+  _isBoxAlreadyConfigured(sbieIni, boxName, steamAppsPath) {
+    try {
+      const out = execSync(`"${sbieIni}" query "${boxName}" OpenFilePath`, {
+        encoding: 'utf8',
+        timeout:  5000,
+        stdio:    ['ignore', 'pipe', 'pipe'],
+      })
+      // Нормализуем пути для сравнения (case-insensitive, slashes)
+      const haveSteam = out.toLowerCase().includes(steamAppsPath.toLowerCase())
+      return haveSteam
+    } catch {
+      return false  // бокса нет или query не сработал → пересоздаём
+    }
   }
 
   // Читает INI, добавляет отсутствующие боксы, записывает обратно.

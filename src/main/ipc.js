@@ -93,7 +93,7 @@ export function setupIPC() {
     if (!creds) return { ok: false, error: 'Аккаунт не найден' }
 
     await workerManager.stop(accountId)
-    accountManager.update(accountId, { status: 'cs2_launching' })
+    accountManager.update(accountId, { status: 'cs2_preparing' })
 
     const send = (status, message) => {
       accountManager.update(accountId, { status })
