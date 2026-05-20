@@ -7,6 +7,7 @@ import steamConfigPatcher from './SteamConfigPatcher'
 import accountManager from './AccountManager'
 import gsiServer from './CS2GSIServer'
 import settings from './Settings'
+import sandboxSteamGuard from './SandboxSteamGuard'
 
 const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
@@ -88,6 +89,16 @@ class CS2Launcher extends EventEmitter {
         '-login', creds.login, creds.password,
         '-noreactlogin',
       ])
+
+      // Параллельно запускаем автоматический ввод Steam Guard кода через steam-totp+nut.js.
+      // Не блокируем основной поток — если код не нужен (cached login) timeout через 60с.
+      // Если код введён — Steam продолжит логин, появится steamwebhelper.exe.
+      // Если auto-input провалился — fallback: пользователь введёт код вручную в Steam UI.
+      sandboxSteamGuard.tryAutoInput(accountId, creds.sharedSecret).then(result => {
+        console.log(`[CS2Launcher ${accountId}] Steam Guard auto-input result: ${result.reason}`)
+      }).catch(err => {
+        console.log(`[CS2Launcher ${accountId}] Steam Guard auto-input error: ${err.message}`)
+      })
 
       // Ждём появления нашего sandboxed steam.exe (не хост-Steam и не чужой бокс)
       await this._waitForNewBoxedProcess('steam', prevSteamCount, STEAM_TIMEOUT_MS, STEAM_POLL_MS,
