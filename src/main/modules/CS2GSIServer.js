@@ -12,6 +12,7 @@ class CS2GSIServer extends EventEmitter {
     super()
     this._server = null
     this._port   = null
+    this._requestCount = 0
   }
 
   ensure() {
@@ -33,7 +34,13 @@ class CS2GSIServer extends EventEmitter {
           req.on('end', () => {
             res.writeHead(200)
             res.end('ok')
-            try { this._handle(JSON.parse(body)) } catch {}
+            this._requestCount++
+            if (this._requestCount <= 3 || this._requestCount % 20 === 0) {
+              console.log(`[CS2GSI] POST #${this._requestCount} received (${body.length} bytes)`)
+            }
+            try { this._handle(JSON.parse(body)) } catch (e) {
+              console.log('[CS2GSI] parse error:', e.message)
+            }
           })
         })
         server.once('error', (e) => {
@@ -91,6 +98,9 @@ class CS2GSIServer extends EventEmitter {
       info  = { steamId64, map: (map.name || '').replace(/^(?:de|cs|gg|ar|dm)_/, '') }
     }
 
+    if (this._requestCount <= 5 || this._requestCount % 20 === 0) {
+      console.log(`[CS2GSI] state=${state} steamId=${info.steamId64} map=${info.map || '-'} phase=${info.phase || '-'}`)
+    }
     this.emit('state', { state, info })
   }
 

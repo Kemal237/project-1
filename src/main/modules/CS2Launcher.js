@@ -94,23 +94,17 @@ class CS2Launcher extends EventEmitter {
         () => onStatus('steam_loading', 'Steam загружается...')
       )
 
-      // Ждём пока Steam авторизуется: userdata/<steamid>/ появляется в sandbox
-      // только после успешного логина. Timeout 90с — продолжаем в любом случае.
-      // Минимум 1.2с на статус steam_loading чтобы пользователь его увидел
-      // (с кэшированными credentials userdata появляется почти мгновенно).
-      const steamReadyStart = Date.now()
+      // Ждём пока Steam реально готов: появился sandboxed steamwebhelper.exe
+      // (Steam создаёт его после полного логина и инициализации UI).
+      // Timeout 90с — продолжаем в любом случае.
       await this._waitForSteamReady(boxName, steamPath, 90_000)
-      const elapsed = Date.now() - steamReadyStart
-      if (elapsed < 1200) await new Promise(r => setTimeout(r, 1200 - elapsed))
       onStatus('steam_running', 'Steam авторизован')
-      // Дать пользователю увидеть steam_running перед переходом к cs2_launching
+      // Минимум 1.2с на статус steam_running перед переходом к cs2_launching
       await new Promise(r => setTimeout(r, 1200))
 
       // Извлекаем SteamID из sandbox loginusers.vdf и сохраняем в БД для GSI routing.
-      // Это покрывает аккаунты которые никогда не делали Farm Start (только Launch CS2).
-      try { this._extractAndSaveSteamId(accountId, boxName, steamPath) } catch (e) {
-        console.log('[CS2Launcher] steamId extraction:', e.message)
-      }
+      // Steam пишет файл с задержкой после логина — пробуем несколько раз.
+      this._extractSteamIdWithRetry(accountId, boxName, steamPath, 5, 1000)
 
       // Фиксируем кол-во sandboxed cs2.exe до запуска
       const prevCs2Count = this._countBoxedProcesses('cs2')
@@ -159,23 +153,23 @@ class CS2Launcher extends EventEmitter {
     } catch {}
   }
 
-  // Ждёт пока Steam авторизуется: после логина Steam создаёт userdata/<steamid>/
-  // в sandbox-папке бокса. Это надёжный сигнал — появляется только после
-  // УСПЕШНОЙ авторизации, не просто после старта процесса.
+  // Ждёт пока Steam реально готов к запуску CS2.
+  // СИГНАЛ: запуск sandboxed steamwebhelper.exe — Steam создаёт этот процесс
+  // ПОСЛЕ полного логина и инициализации UI. Это надёжный indicator готовности
+  // (в отличие от userdata/ которая остаётся от прошлой сессии и появляется мгновенно).
   // При timeout (Steam Guard ожидает код и т.п.) просто продолжаем — CS2 и так запустится.
   _waitForSteamReady(boxName, steamPath, timeoutMs) {
-    const username     = userInfo().username
-    const driveLetter  = steamPath[0]
-    const restPath     = steamPath.slice(2)
-    const sandboxSteam = `C:\\Sandbox\\${username}\\${boxName}\\drive\\${driveLetter}${restPath}`
-    const userdataDir  = join(sandboxSteam, 'userdata')
-
     return new Promise(resolve => {
       const deadline = Date.now() + timeoutMs
+      const startTime = Date.now()
       const check = () => {
-        if (existsSync(userdataDir)) return resolve()
+        // Минимум 3 секунды от старта Steam — даём ему запустить процесс
+        if (Date.now() - startTime >= 3000) {
+          const count = this._countBoxedProcesses('steamwebhelper')
+          if (count > 0) return resolve()
+        }
         if (Date.now() >= deadline) return resolve()  // timeout → продолжаем
-        setTimeout(check, 2000)
+        setTimeout(check, 1500)
       }
       check()
     })
@@ -243,23 +237,71 @@ class CS2Launcher extends EventEmitter {
   // Парсит loginusers.vdf из sandbox-папки Steam после успешного логина
   // и сохраняет SteamID64 в БД (для маршрутизации GSI events по SteamID).
   // Steam VDF format: { "users" { "<steamid64>" { ... } } }
+  //
+  // Sandboxie может перенаправлять путь по-разному (case-sensitivity, user\current\ префикс,
+  // и т.п.). Поэтому делаем рекурсивный поиск loginusers.vdf по всему sandbox-дереву бокса.
   _extractAndSaveSteamId(accountId, boxName, steamPath) {
-    const username     = userInfo().username
-    const driveLetter  = steamPath[0]
-    const restPath     = steamPath.slice(2)
-    const sandboxSteam = `C:\\Sandbox\\${username}\\${boxName}\\drive\\${driveLetter}${restPath}`
-    const vdfPath      = join(sandboxSteam, 'config', 'loginusers.vdf')
+    const username   = userInfo().username
+    const boxRoot    = `C:\\Sandbox\\${username}\\${boxName}`
 
-    if (!existsSync(vdfPath)) return
+    if (!existsSync(boxRoot)) {
+      console.log(`[CS2Launcher ${accountId}] sandbox root NOT FOUND: ${boxRoot}`)
+      return
+    }
+
+    const vdfPath = this._findFileRecursive(boxRoot, 'loginusers.vdf', 6)
+    if (!vdfPath) {
+      console.log(`[CS2Launcher ${accountId}] loginusers.vdf NOT FOUND anywhere in ${boxRoot}`)
+      return
+    }
 
     const content = readFileSync(vdfPath, 'utf8')
-    // Ищем первый 17-значный SteamID64 (формат "76561198XXXXXXXXX")
     const m = content.match(/"(7656\d{13})"/)
-    if (!m) return
+    if (!m) {
+      console.log(`[CS2Launcher ${accountId}] SteamID64 NOT FOUND in ${vdfPath}`)
+      return
+    }
 
     const steamId64 = m[1]
     accountManager.update(accountId, { steamId: steamId64 })
-    console.log(`[CS2Launcher ${accountId}] saved steamId from sandbox: ${steamId64}`)
+    console.log(`[CS2Launcher ${accountId}] saved steamId=${steamId64} from ${vdfPath}`)
+  }
+
+  // Рекурсивный поиск файла по имени с ограничением глубины (защита от symlink-петель).
+  _findFileRecursive(dir, fileName, maxDepth) {
+    if (maxDepth <= 0) return null
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true })
+      for (const e of entries) {
+        const full = join(dir, e.name)
+        if (e.isDirectory()) {
+          const found = this._findFileRecursive(full, fileName, maxDepth - 1)
+          if (found) return found
+        } else if (e.name.toLowerCase() === fileName.toLowerCase()) {
+          return full
+        }
+      }
+    } catch {}
+    return null
+  }
+
+  // Повторяет попытки извлечь SteamID — Steam пишет loginusers.vdf с задержкой
+  // после логина (1-5 секунд). Работает в фоне, не блокирует запуск CS2.
+  async _extractSteamIdWithRetry(accountId, boxName, steamPath, attempts, intervalMs) {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const account = accountManager.getBySteamId && null  // (use update path via DB)
+        this._extractAndSaveSteamId(accountId, boxName, steamPath)
+        // Проверим что сохранилось
+        const all = accountManager.getAll()
+        const a = all.find(x => x.id === accountId)
+        if (a?.steamId) return  // успех
+      } catch (e) {
+        console.log(`[CS2Launcher ${accountId}] extract retry ${i + 1}:`, e.message)
+      }
+      await new Promise(r => setTimeout(r, intervalMs))
+    }
+    console.log(`[CS2Launcher ${accountId}] steamId NOT extracted after ${attempts} attempts (fallback: auto-mapping via GSI will be used when single CS2 is running)`)
   }
 
   // Пишет GSI config файл в CS2 cfg-папку. CS2 шлёт state на uri при каждом

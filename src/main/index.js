@@ -1,5 +1,12 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
+import { execSync } from 'child_process'
+
+// Принудительно UTF-8 для Windows-консоли (иначе русские symbols → кракозябры).
+// Делается ДО любых console.log на старте приложения.
+if (process.platform === 'win32') {
+  try { execSync('chcp 65001', { stdio: 'ignore' }) } catch {}
+}
 import { autoUpdater } from 'electron-updater'
 import { setupIPC } from './ipc'
 import db from './modules/Database'

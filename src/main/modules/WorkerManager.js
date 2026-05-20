@@ -1,6 +1,7 @@
 import { SteamWorker } from './SteamWorker'
 import accountManager from './AccountManager'
 import gsiServer from './CS2GSIServer'
+import cs2Launcher from './CS2Launcher'
 
 class WorkerManager {
   constructor() {
@@ -22,12 +23,34 @@ class WorkerManager {
     // когда аккаунт уже в одном из "стабильных" CS2-состояний — иначе GSI heartbeat
     // от уже запущенной игры может затереть промежуточные шаги запуска
     // (steam_launching → steam_loading → steam_running → cs2_launching).
-    const GSI_OVERRIDABLE = new Set(['cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
+    // cs2_loading тоже overridable — если GSI говорит lobby/match, CS2 точно прошла
+    // загрузку (даже если наш hardcoded wait ещё идёт). Реальное состояние > таймера.
+    const GSI_OVERRIDABLE = new Set(['cs2_lobby', 'cs2_match_loading', 'cs2_in_match', 'cs2_loading'])
 
+    let _debugCount = 0
     gsiServer.on('state', ({ state, info }) => {
+      _debugCount++
       const steamId = info?.steamId64
-      if (!steamId) return
-      const account = accountManager.getBySteamId(steamId)
+
+      if (!steamId) {
+        if (_debugCount <= 3) console.log('[WorkerManager GSI] skip: no steamId64 in payload')
+        return
+      }
+      let account = accountManager.getBySteamId(steamId)
+      if (!account) {
+        // Fallback: если запущен ровно один CS2 через Launch CS2, GSI event от него.
+        // Автомаппинг — связываем steamId с этим аккаунтом и сохраняем в БД.
+        const activeIds = [...cs2Launcher._active.keys()]
+        if (activeIds.length === 1) {
+          const id = activeIds[0]
+          accountManager.update(id, { steamId })
+          account = accountManager.getAll().find(a => a.id === id)
+          console.log(`[WorkerManager GSI] auto-mapped steamId=${steamId} -> accountId=${id} (${account?.login})`)
+        } else {
+          if (_debugCount <= 5) console.log(`[WorkerManager GSI] skip: no account for steamId=${steamId} (active Launch CS2 count: ${activeIds.length}, need exactly 1 for auto-mapping)`)
+          return
+        }
+      }
       if (!account) return
 
       let newStatus
@@ -36,9 +59,13 @@ class WorkerManager {
       else if (state === 'lobby') newStatus = 'cs2_lobby'
       else return
 
-      if (!GSI_OVERRIDABLE.has(account.status)) return  // launch sequence идёт — не трогаем
-      if (account.status === newStatus) return          // нет изменений — не флудим IPC
+      if (!GSI_OVERRIDABLE.has(account.status)) {
+        if (_debugCount <= 10) console.log(`[WorkerManager GSI] skip: account ${account.id} in launch-sequence (status=${account.status}, would-be ${newStatus})`)
+        return
+      }
+      if (account.status === newStatus) return
 
+      console.log(`[WorkerManager GSI] account ${account.id} (${account.login}) status: ${account.status} -> ${newStatus}`)
       accountManager.update(account.id, { status: newStatus })
       this.webContents?.send('worker:statusChange', {
         accountId: account.id,

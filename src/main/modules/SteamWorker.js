@@ -86,7 +86,7 @@ export class SteamWorker extends EventEmitter {
       this._setupClientEvents()
     } catch (err) {
       if (this._stopped) return
-      console.log(`[SteamWorker ${this.accountId}] login error — eresult:${err.eresult} code:${err.code} msg:${err.message}`)
+      console.log(`[SteamWorker ${this.accountId}] login error - eresult:${err.eresult} code:${err.code} msg:${err.message}`)
       if (FATAL_ERESULTS.has(err.eresult)) {
         return this._fatal(err.code || 'ERR_FATAL', friendlyError(err.eresult, err.message))
       }
@@ -140,7 +140,7 @@ export class SteamWorker extends EventEmitter {
 
     client.on('error', (err) => {
       if (this._stopped) return
-      console.log(`[SteamWorker ${this.accountId}] client error — eresult:${err.eresult} msg:${err.message}`)
+      console.log(`[SteamWorker ${this.accountId}] client error - eresult:${err.eresult} msg:${err.message}`)
       this._gc?.destroy()
       this._gc = null
       client.removeAllListeners()
