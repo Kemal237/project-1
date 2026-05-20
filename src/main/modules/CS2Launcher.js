@@ -90,14 +90,14 @@ class CS2Launcher extends EventEmitter {
         '-noreactlogin',
       ])
 
-      // Параллельно запускаем автоматический ввод Steam Guard кода через steam-totp+nut.js.
-      // Не блокируем основной поток — если код не нужен (cached login) timeout через 60с.
-      // Если код введён — Steam продолжит логин, появится steamwebhelper.exe.
-      // Если auto-input провалился — fallback: пользователь введёт код вручную в Steam UI.
-      sandboxSteamGuard.tryAutoInput(accountId, creds.sharedSecret).then(result => {
-        console.log(`[CS2Launcher ${accountId}] Steam Guard auto-input result: ${result.reason}`)
+      // Параллельно запускаем автоматический ввод credentials и Steam Guard кода.
+      // Обрабатывает 2 типа окон: login dialog (логин+пароль) и Guard dialog (5-знач код).
+      // Не блокируем основной поток — если ни одно окно не появится (cached ssfn) timeout 60с.
+      // Если auto-input провалился — fallback: пользователь введёт вручную в Steam UI.
+      sandboxSteamGuard.tryAutoInput(accountId, creds.login, creds.password, creds.sharedSecret).then(result => {
+        console.log(`[CS2Launcher ${accountId}] Steam auto-input result: ${result.reason}`)
       }).catch(err => {
-        console.log(`[CS2Launcher ${accountId}] Steam Guard auto-input error: ${err.message}`)
+        console.log(`[CS2Launcher ${accountId}] Steam auto-input error: ${err.message}`)
       })
 
       // Ждём появления нашего sandboxed steam.exe (не хост-Steam и не чужой бокс)
