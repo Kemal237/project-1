@@ -2,50 +2,44 @@ import { execSync } from 'child_process'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { keyboard, Key } from '@nut-tree-fork/nut-js'
+import { keyboard, Key, mouse, Point, Button } from '@nut-tree-fork/nut-js'
 import SteamTotp from 'steam-totp'
 
-// Автоматический ввод Steam Guard кода в sandboxed Steam.
+// Автоматический ввод логина+пароля+Steam Guard в sandboxed Steam.
 //
-// Flow:
-//   1. После запуска Steam.exe -login user pass, Steam может показать диалог
-//      "Steam Guard - Computer Authorization Required"
-//   2. Polling 500мс через EnumWindows ищет это окно по нескольким известным title-паттернам
-//   3. Если найдено: генерирует код через steam-totp (с проверкой времени жизни),
-//      активирует окно через AttachThreadInput (как в BotAutomation), вводит код через nut.js
-//   4. Ждёт закрытия окна 5 сек. Если закрылось → код принят
-//   5. Если не закрылось → код отклонён, retry до 3 раз
-//   6. Если окно не появилось за GUARD_WAIT_TIMEOUT — Steam использовал cached login
-//      (ssfn файлы валидны) → ничего делать не нужно
+// КЛЮЧЕВАЯ ИДЕЯ (v1.1.8): окна ищем НАПРЯМУЮ через EnumWindows без фильтра
+// по PID. Get-Process не видит sandboxed Steam-процессы (проверено логом
+// "<no steam/steamwebhelper processes found>"), но EnumWindows их видит
+// (BotAutomation так же находит окно CS2). Фильтруем top-level окна
+// по классу (Chrome_WidgetWin*, SDL_app, vgui*), размеру и title.
 
 const PS_DIR = join(tmpdir(), 'cs2farmpanel-ps-guard')
 
-const GUARD_WAIT_TIMEOUT = 60_000  // максимум ждём появления Guard окна
-const GUARD_POLL_INTERVAL = 500    // интервал опроса
-const CODE_SUBMIT_WAIT = 5000      // ждём закрытия окна после ввода кода
-const MAX_RETRIES = 3              // попыток ввода если код отклонён
-const MIN_CODE_LIFETIME = 3        // если код истекает раньше — ждём новый
+const POLL_TIMEOUT      = 600_000  // 10 мин — первый запуск Steam в боксе скачивает клиент
+const POLL_INTERVAL     = 1500
+const CODE_SUBMIT_WAIT  = 5000
+const MAX_RETRIES       = 3
+const MIN_CODE_LIFETIME = 3
+const POST_LOGIN_WAIT   = 4000
+// Окно "Войти в Steam" создаётся с готовым title, но CEF внутри рисуется ~5-10с.
+// Если ввести сразу — данные уйдут в пустоту. Ждём перед первым вводом.
+const LOGIN_FORM_RENDER_WAIT = 8000
+const LOGIN_RETRY_MAX        = 3
+const LOGIN_RETRY_WAIT       = 6000
 
-// PS-скрипт: ищем Steam окно — login dialog ИЛИ Steam Guard окно.
-// Возвращаем "type|hwnd":
-//   "guard|<hwnd>" — окно Steam Guard (нужен 2FA код)
-//   "login|<hwnd>" — окно входа Steam (нужны login+password)
-//   "none|0"       — нет таких окон
-//
-// Логика:
-//   1. Ищем все visible окна с классом Chrome_WidgetWin / SDL_app / vgui
-//      (Steam в Sandboxie использует CEF или SDL — оба типа возможны)
-//   2. Анализируем title:
-//      - "steam guard" / "computer authorization" / "авторизация" → guard
-//      - "sign in" / "войдите" / "steam" (без других слов) → login
-//      - просто "Steam" без title → главное окно Steam (может быть login state)
-//   3. Login dialog часто имеет title "Steam Sign In" или просто "Steam" (новый CEF UI)
-const FIND_WINDOW_PS = `
+// PS-скрипт: возвращает ВСЕ top-level окна с непустым title.
+// Фильтрация по классу убрана — sandboxed Steam splash имеет нестандартный класс.
+// Sandboxed окна определяем в JS по маркеру "[#]" в title (добавляет Sandboxie).
+// Также отсекаем 0x0 окна (невидимые placeholder'ы) — их в Windows десятки.
+// Возвращает JSON: [{hwnd, pid, title, class, width, height, visible}]
+const ENUM_STEAM_WINDOWS_PS = `
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-public static class SteamFind {
+public static class WinE {
   public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lpEnumFunc, IntPtr lParam);
   [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
@@ -53,66 +47,59 @@ public static class SteamFind {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 
-  public static string Find() {
-    string guardResult = "none|0";
-    string loginResult = "none|0";
+  public static List<long[]> Wins = new List<long[]>();
+  public static List<string> Titles = new List<string>();
+  public static List<string> Classes = new List<string>();
 
+  public static void Enumerate() {
+    Wins.Clear(); Titles.Clear(); Classes.Clear();
     EnumProc cb = delegate(IntPtr hWnd, IntPtr lp) {
-      if (!IsWindowVisible(hWnd)) return true;
       int len = GetWindowTextLength(hWnd);
-      if (len < 4) return true;
-
-      StringBuilder sb = new StringBuilder(len + 1);
-      GetWindowText(hWnd, sb, sb.Capacity);
-      string title = sb.ToString();
-      string titleLower = title.ToLower();
-
-      StringBuilder cn = new StringBuilder(256);
-      GetClassName(hWnd, cn, cn.Capacity);
-      string className = cn.ToString();
-      bool steamClass = className.Contains("Chrome_WidgetWin") ||
-                        className.Contains("SDL_app") ||
-                        className.Contains("vgui") ||
-                        className.Contains("CUIEngine");
-
-      // Guard окно: явный indicator в title
-      if (titleLower.Contains("steam guard") ||
-          titleLower.Contains("computer authorization") ||
-          titleLower.Contains("авторизация компьютера") ||
-          titleLower.Contains("подтверждение steam guard")) {
-        guardResult = "guard|" + hWnd.ToInt64();
-        return true; // продолжаем искать
-      }
-
-      // Login dialog (старый формат): title "Steam Sign In" или "Steam - Вход"
-      if (titleLower.Contains("sign in") || titleLower.Contains("steam - вход")) {
-        loginResult = "login|" + hWnd.ToInt64();
-        return true;
-      }
-
-      // Login dialog (новый CEF формат 2023+): title просто "Steam" + класс Chrome_WidgetWin
-      // Это главное окно Steam — но в login state оно показывает login form
-      // (отличить от уже-залогиненного state невозможно без OCR; используем как fallback)
-      if (titleLower == "steam" && steamClass && loginResult == "none|0") {
-        loginResult = "login|" + hWnd.ToInt64();
-        return true;
-      }
-
+      if (len < 1) return true;  // окна с пустым title не интересны
+      StringBuilder t = new StringBuilder(len + 1);
+      GetWindowText(hWnd, t, t.Capacity);
+      string title = t.ToString();
+      RECT r;
+      int w = 0, h = 0, x = 0, y = 0;
+      if (GetWindowRect(hWnd, out r)) { x = r.Left; y = r.Top; w = r.Right - r.Left; h = r.Bottom - r.Top; }
+      if (w < 100 || h < 100) return true;  // отсекаем placeholder'ы
+      StringBuilder c = new StringBuilder(256);
+      GetClassName(hWnd, c, c.Capacity);
+      bool visible = IsWindowVisible(hWnd);
+      uint pid = 0;
+      GetWindowThreadProcessId(hWnd, out pid);
+      Wins.Add(new long[] { hWnd.ToInt64(), (long)pid, w, h, visible ? 1L : 0L, x, y });
+      Titles.Add(title);
+      Classes.Add(c.ToString());
       return true;
     };
     EnumWindows(cb, IntPtr.Zero);
-
-    // Guard приоритетнее login (если оба есть — сначала вводим код Guard)
-    return guardResult != "none|0" ? guardResult : loginResult;
   }
 }
 '@
-$r = [SteamFind]::Find()
-Write-Output $r
+[WinE]::Enumerate()
+$out = New-Object 'System.Collections.Generic.List[object]'
+for ($i = 0; $i -lt [WinE]::Wins.Count; $i++) {
+  $w = [WinE]::Wins[$i]
+  $obj = [PSCustomObject]@{
+    hwnd    = $w[0]
+    pid     = [int]$w[1]
+    width   = [int]$w[2]
+    height  = [int]$w[3]
+    visible = ($w[4] -eq 1)
+    left    = [int]$w[5]
+    top     = [int]$w[6]
+    title   = [WinE]::Titles[$i]
+    class   = [WinE]::Classes[$i]
+  }
+  $out.Add($obj)
+}
+$out | ConvertTo-Json -Compress
 `.trim()
 
-// PS-скрипт: проверить что HWND ещё валиден (окно не закрылось).
 const IS_WINDOW_PS = `
 param([long]$Hwnd)
 Add-Type @'
@@ -128,7 +115,6 @@ $exists = [WinCheck]::IsWindow($h) -and [WinCheck]::IsWindowVisible($h)
 Write-Output $(if ($exists) { '1' } else { '0' })
 `.trim()
 
-// PS-скрипт: активировать окно через AttachThreadInput trick (как в BotAutomation).
 const ACTIVATE_PS = `
 param([long]$Hwnd)
 Add-Type @'
@@ -160,68 +146,102 @@ Write-Output $(if ($ok) { 'OK' } else { 'FAIL' })
 class SandboxSteamGuard {
   constructor() {
     this._scriptsWritten = false
+    this._seenHwnds = new Set()  // hwnd-ы которые уже логировались (чтоб не спамить)
   }
 
   _ensureScripts() {
     if (this._scriptsWritten) return
     try {
       mkdirSync(PS_DIR, { recursive: true })
-      writeFileSync(join(PS_DIR, 'find-window.ps1'),  FIND_WINDOW_PS, 'utf8')
-      writeFileSync(join(PS_DIR, 'is-window.ps1'),    IS_WINDOW_PS,   'utf8')
-      writeFileSync(join(PS_DIR, 'activate-guard.ps1'), ACTIVATE_PS, 'utf8')
+      writeFileSync(join(PS_DIR, 'enum-steam-windows.ps1'), ENUM_STEAM_WINDOWS_PS, 'utf8')
+      writeFileSync(join(PS_DIR, 'is-window.ps1'),          IS_WINDOW_PS,          'utf8')
+      writeFileSync(join(PS_DIR, 'activate-guard.ps1'),     ACTIVATE_PS,           'utf8')
       this._scriptsWritten = true
     } catch (e) {
       console.log('[SandboxSteamGuard] _ensureScripts error:', e.message)
     }
   }
 
-  // Главный API. Возвращает { ok, reason }.
-  // Обрабатывает ДВА типа окон последовательно:
-  //   1. Steam login dialog (поля логин+пароль) — вводим credentials через nut.js
-  //   2. Steam Guard dialog (5-значный код) — вводим код из shared_secret
-  // Если первого нет — Steam использует cached login. Если второго нет — ssfn доверяет машине.
   async tryAutoInput(accountId, login, password, sharedSecret) {
     this._ensureScripts()
+    this._seenHwnds.clear()
 
-    console.log(`[SandboxSteamGuard ${accountId}] waiting for Steam window (max ${GUARD_WAIT_TIMEOUT / 1000}s)...`)
+    console.log(`[SandboxSteamGuard ${accountId}] waiting for Steam window (max ${POLL_TIMEOUT / 1000}s)...`)
     let loginSubmitted = false
 
-    const deadline = Date.now() + GUARD_WAIT_TIMEOUT
+    const deadline = Date.now() + POLL_TIMEOUT
     while (Date.now() < deadline) {
-      const found = this._findSteamWindow()
-      if (!found) {
-        await this._sleep(GUARD_POLL_INTERVAL)
-        continue
+      const allWindows = this._enumSteamWindows()
+      // Sandboxie добавляет маркер [#] в title И префикс Sandbox:<box>: к classname.
+      // Любой из двух признаков надёжно идентифицирует sandboxed окно.
+      const sandboxed = allWindows.filter(w =>
+        (w.title || '').includes('[#]') || (w.class || '').startsWith('Sandbox:')
+      )
+
+      // Логируем каждое НОВОЕ окно (по hwnd) — увидим как Steam развивается:
+      // splash → bootstrap → login dialog → main UI
+      const fresh = sandboxed.filter(w => !this._seenHwnds.has(w.hwnd))
+      if (fresh.length > 0) {
+        for (const w of fresh) this._seenHwnds.add(w.hwnd)
+        const summary = fresh.map(w =>
+          `[${w.visible?'V':'-'} ${w.width}x${w.height} class="${w.class}" title="${w.title}"]`
+        ).join(' ')
+        console.log(`[SandboxSteamGuard ${accountId}] new sandboxed window(s): ${summary}`)
       }
 
-      // Login dialog — вводим креды один раз
-      if (found.type === 'login' && !loginSubmitted) {
+      const found = this._classifyWindows(sandboxed)
+
+      if (found.login && !loginSubmitted) {
         if (!login || !password) {
           console.log(`[SandboxSteamGuard ${accountId}] login dialog detected but no credentials — skip`)
           return { ok: false, reason: 'no_credentials' }
         }
-        console.log(`[SandboxSteamGuard ${accountId}] login dialog hwnd=${found.hwnd}, entering credentials...`)
-        const ok = await this._submitLogin(found.hwnd, login, password)
-        if (!ok) {
-          return { ok: false, reason: 'login_failed' }
+        console.log(`[SandboxSteamGuard ${accountId}] login dialog hwnd=${found.login} (${found.loginInfo}), waiting ${LOGIN_FORM_RENDER_WAIT/1000}s for CEF form to render...`)
+        await this._sleep(LOGIN_FORM_RENDER_WAIT)
+
+        // Retry: первая попытка может ещё попасть в недогруженную форму
+        let submitted = false
+        for (let attempt = 1; attempt <= LOGIN_RETRY_MAX; attempt++) {
+          if (!this._isWindowVisible(found.login)) {
+            console.log(`[SandboxSteamGuard ${accountId}] login window closed before attempt ${attempt} — already accepted`)
+            submitted = true
+            break
+          }
+          console.log(`[SandboxSteamGuard ${accountId}] entering credentials, attempt ${attempt}/${LOGIN_RETRY_MAX}...`)
+          const ok = await this._submitLogin(found.login, found.loginRect, login, password)
+          if (!ok) {
+            console.log(`[SandboxSteamGuard ${accountId}] submit failed on attempt ${attempt}`)
+            if (attempt === LOGIN_RETRY_MAX) return { ok: false, reason: 'login_failed' }
+            await this._sleep(LOGIN_RETRY_WAIT)
+            continue
+          }
+          // Ждём — если окно закрылось/изменилось → принято; если осталось → повторим
+          await this._sleep(LOGIN_RETRY_WAIT)
+          if (!this._isWindowVisible(found.login)) {
+            console.log(`[SandboxSteamGuard ${accountId}] login accepted on attempt ${attempt} (window closed)`)
+            submitted = true
+            break
+          }
+          console.log(`[SandboxSteamGuard ${accountId}] login window still open after attempt ${attempt}, retrying...`)
+        }
+        if (!submitted) {
+          console.log(`[SandboxSteamGuard ${accountId}] all ${LOGIN_RETRY_MAX} login attempts done, window still open — continue polling for guard/error`)
         }
         loginSubmitted = true
-        console.log(`[SandboxSteamGuard ${accountId}] credentials submitted, waiting for next step...`)
-        await this._sleep(3000)  // даём Steam отреагировать
+        await this._sleep(POST_LOGIN_WAIT)
         continue
       }
 
-      // Guard dialog — вводим код
-      if (found.type === 'guard') {
+      if (found.guard) {
         if (!sharedSecret) {
           console.log(`[SandboxSteamGuard ${accountId}] Guard window appeared but no shared_secret — manual input needed`)
           return { ok: false, reason: 'no_shared_secret' }
         }
-        console.log(`[SandboxSteamGuard ${accountId}] Guard window hwnd=${found.hwnd}, submitting code...`)
-        return await this._submitGuardCode(accountId, found.hwnd, sharedSecret)
+        console.log(`[SandboxSteamGuard ${accountId}] Guard window hwnd=${found.guard} (${found.guardInfo}), submitting code...`)
+        return await this._submitGuardCode(accountId, found.guard, sharedSecret)
       }
 
-      await this._sleep(GUARD_POLL_INTERVAL)
+      await this._sleep(POLL_INTERVAL)
     }
 
     if (loginSubmitted) {
@@ -232,36 +252,152 @@ class SandboxSteamGuard {
     return { ok: true, reason: 'no_guard_needed' }
   }
 
-  // Вводит login + Tab + password + Enter в login dialog.
-  async _submitLogin(hwnd, login, password) {
+  // === Внутренняя логика ===
+
+  _enumSteamWindows() {
+    const script = join(PS_DIR, 'enum-steam-windows.ps1')
+    if (!existsSync(script)) this._ensureScripts()
+    try {
+      const out = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}"`,
+        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim()
+      if (!out) return []
+      let parsed
+      try { parsed = JSON.parse(out) } catch { return [] }
+      if (!Array.isArray(parsed)) parsed = [parsed]
+      return parsed
+    } catch {
+      return []
+    }
+  }
+
+  _classifyWindows(windows) {
+    let guard = null, guardInfo = ''
+    let bestLogin = null
+
+    for (const w of windows) {
+      if (!w.visible) continue
+      // Чистим title от Sandboxie маркеров "[#] ... [#]" перед матчингом
+      const rawTitle  = (w.title || '')
+      const cleanRaw  = rawTitle.replace(/\[#\]/g, '').trim()
+      const title     = cleanRaw.toLowerCase()
+      const cls       = w.class || ''
+      const area      = w.width * w.height
+
+      // Guard: явный indicator в title
+      if (title.includes('steam guard') ||
+          title.includes('computer authorization') ||
+          title.includes('авторизация компьютера') ||
+          title.includes('подтверждение steam guard')) {
+        guard = w.hwnd
+        guardInfo = `${w.width}x${w.height} "${rawTitle}"`
+        continue
+      }
+
+      // Splash Steam ("Steam — синхронизация" / "Steam — Loading" / "Updating Steam")
+      // обычно меньше login UI. Login 2024+ ~720x480 минимум. Порог ≥500x350.
+      if (w.width < 500 || w.height < 350) continue
+
+      // Login: явные ключевые слова в title после чистки от Sandboxie маркера
+      const isExplicitLogin =
+        title.includes('sign in') ||
+        title.includes('войти') ||
+        title.includes('вход') ||
+        title === 'steam'
+
+      // CEF login без явного title (после чистки пустой)
+      const isCefLogin =
+        title === '' &&
+        (cls.includes('Chrome_WidgetWin') || cls.includes('SDL_app'))
+
+      // Страховка: sandboxed Steam UI окно подходящего размера с любым
+      // упоминанием "steam" в title (латиница не страдает от кодировки).
+      // Класс SDL_app / Chrome_WidgetWin / CUIEngine + размер ≥500x350.
+      const isSandboxedSteamUi =
+        (cls.includes('SDL_app') || cls.includes('Chrome_WidgetWin') || cls.includes('CUIEngine')) &&
+        title.includes('steam')
+
+      if (isExplicitLogin || isCefLogin || isSandboxedSteamUi) {
+        if (!bestLogin || area > bestLogin.area) {
+          bestLogin = {
+            hwnd: w.hwnd,
+            area,
+            left: w.left,
+            top: w.top,
+            width: w.width,
+            height: w.height,
+            info: `${w.width}x${w.height}@(${w.left},${w.top}) "${rawTitle}" class="${cls}"`,
+          }
+        }
+      }
+    }
+
+    return {
+      login:     bestLogin?.hwnd || null,
+      loginRect: bestLogin ? { left: bestLogin.left, top: bestLogin.top, width: bestLogin.width, height: bestLogin.height } : null,
+      loginInfo: bestLogin?.info || '',
+      guard,
+      guardInfo,
+    }
+  }
+
+  async _submitLogin(hwnd, rect, login, password) {
     if (!this._activateWindow(hwnd)) return false
-    await this._sleep(400)  // Steam UI медленный, даём время на фокус
+    await this._sleep(500)
 
     try {
-      // Очистим поле (на случай auto-fill)
+      // Steam CEF login UI: окно ~705x440. Поле "Имя аккаунта" в левой колонке,
+      // под подписью. Координаты пропорциональны (на случай других размеров окна):
+      //   X: ~25% от ширины (левая колонка по центру)
+      //   Y: ~32% от высоты (под заголовком поля)
+      // Поле пароля — Y ~52%.
+      const loginFieldX = rect.left + Math.floor(rect.width * 0.25)
+      const loginFieldY = rect.top  + Math.floor(rect.height * 0.32)
+      const passFieldX  = loginFieldX
+      const passFieldY  = rect.top  + Math.floor(rect.height * 0.52)
+
+      // Сохраним прежнее autoDelayMs у мыши и keyboard
+      const prevMouseDelay = mouse.config.autoDelayMs
+      mouse.config.autoDelayMs = 50
+
+      // Клик по полю логина → фокус
+      await mouse.setPosition(new Point(loginFieldX, loginFieldY))
+      await this._sleep(80)
+      await mouse.click(Button.LEFT)
+      await this._sleep(250)
+
+      // Очистим поле на случай auto-fill
       await keyboard.pressKey(Key.LeftControl, Key.A)
       await keyboard.releaseKey(Key.LeftControl, Key.A)
-      await this._sleep(50)
+      await this._sleep(80)
       await keyboard.pressKey(Key.Delete)
       await keyboard.releaseKey(Key.Delete)
-      await this._sleep(80)
+      await this._sleep(100)
 
-      // Вводим логин
       await this._typeString(login)
-      await this._sleep(150)
+      await this._sleep(250)
 
-      // Tab → поле пароля
-      await keyboard.pressKey(Key.Tab)
-      await keyboard.releaseKey(Key.Tab)
-      await this._sleep(150)
+      // Клик по полю пароля → фокус (надёжнее чем Tab, он может уйти на checkbox/QR)
+      await mouse.setPosition(new Point(passFieldX, passFieldY))
+      await this._sleep(80)
+      await mouse.click(Button.LEFT)
+      await this._sleep(250)
 
-      // Вводим пароль
+      await keyboard.pressKey(Key.LeftControl, Key.A)
+      await keyboard.releaseKey(Key.LeftControl, Key.A)
+      await this._sleep(80)
+      await keyboard.pressKey(Key.Delete)
+      await keyboard.releaseKey(Key.Delete)
+      await this._sleep(100)
+
       await this._typeString(password)
-      await this._sleep(150)
+      await this._sleep(250)
 
-      // Enter → submit
       await keyboard.pressKey(Key.Enter)
       await keyboard.releaseKey(Key.Enter)
+
+      mouse.config.autoDelayMs = prevMouseDelay
       return true
     } catch (e) {
       console.log(`[SandboxSteamGuard] _submitLogin error: ${e.message}`)
@@ -286,28 +422,28 @@ class SandboxSteamGuard {
         await this._sleep(2000)
         continue
       }
-      await this._sleep(200)
+      await this._sleep(300)
 
       try {
         await keyboard.pressKey(Key.LeftControl, Key.A)
         await keyboard.releaseKey(Key.LeftControl, Key.A)
-        await this._sleep(50)
+        await this._sleep(60)
         await keyboard.pressKey(Key.Delete)
         await keyboard.releaseKey(Key.Delete)
-        await this._sleep(80)
+        await this._sleep(100)
 
         for (const ch of code) {
           const key = this._charToKey(ch)
           if (key) {
             await keyboard.pressKey(key)
-            await this._sleep(40)
+            await this._sleep(50)
             await keyboard.releaseKey(key)
-            await this._sleep(40)
+            await this._sleep(50)
           }
         }
-        await this._sleep(120)
+        await this._sleep(150)
         await keyboard.pressKey(Key.Enter)
-        await this._sleep(50)
+        await this._sleep(60)
         await keyboard.releaseKey(Key.Enter)
       } catch (e) {
         console.log(`[SandboxSteamGuard ${accountId}] keyboard input error: ${e.message}`)
@@ -327,12 +463,8 @@ class SandboxSteamGuard {
     return { ok: false, reason: 'code_rejected' }
   }
 
-  // Печатает произвольную строку через встроенный nut.js type() —
-  // он сам обрабатывает спец-символы, регистр, layouts (важно для паролей
-  // которые могут содержать !@#$% и подобное).
   async _typeString(str) {
     try {
-      // Замедляем для надёжности (CEF UI Steam может терять символы при быстром вводе)
       const prevDelay = keyboard.config.autoDelayMs
       keyboard.config.autoDelayMs = 35
       await keyboard.type(str)
@@ -343,11 +475,7 @@ class SandboxSteamGuard {
     }
   }
 
-  // === Internal ===
-
   async _generateFreshCode(sharedSecret) {
-    // Steam Guard коды живут 30 сек (TOTP стандарт).
-    // Если до конца текущего окна < MIN_CODE_LIFETIME — ждём следующее.
     const secsInWindow = Math.floor(Date.now() / 1000) % 30
     const remaining = 30 - secsInWindow
     if (remaining < MIN_CODE_LIFETIME) {
@@ -364,25 +492,6 @@ class SandboxSteamGuard {
       await this._sleep(250)
     }
     return false
-  }
-
-  // Возвращает { type: 'login'|'guard', hwnd: number } или null если ничего не найдено
-  _findSteamWindow() {
-    const script = join(PS_DIR, 'find-window.ps1')
-    if (!existsSync(script)) this._ensureScripts()
-    try {
-      const out = execSync(
-        `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}"`,
-        { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
-      ).trim()
-      const [type, hwndStr] = out.split('|')
-      if (type === 'none') return null
-      const hwnd = Number(hwndStr)
-      if (isNaN(hwnd) || hwnd === 0) return null
-      return { type, hwnd }
-    } catch {
-      return null
-    }
   }
 
   _isWindowVisible(hwnd) {
