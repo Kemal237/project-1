@@ -90,29 +90,53 @@ class CS2Launcher extends EventEmitter {
         '-noreactlogin',
       ])
 
-      // Параллельно запускаем автоматический ввод credentials и Steam Guard кода.
-      // Обрабатывает 2 типа окон: login dialog (логин+пароль) и Guard dialog (5-знач код).
-      // Передаём onStatus как onStep — модуль сам шлёт детальные статусы
-      // через ключевые точки (нашли окно входа, вводим логин/пароль, нашли Guard,
-      // вводим Guard код, успех). Если ни одно окно не появится (cached ssfn) timeout.
-      sandboxSteamGuard.tryAutoInput(accountId, creds.login, creds.password, creds.sharedSecret, onStatus).then(result => {
-        console.log(`[CS2Launcher ${accountId}] Steam auto-input result: ${result.reason}`)
-      }).catch(err => {
-        console.log(`[CS2Launcher ${accountId}] Steam auto-input error: ${err.message}`)
-      })
-
-      // Ждём появления нашего sandboxed steam.exe (не хост-Steam и не чужой бокс)
+      // Ждём появления нашего sandboxed steam.exe (не хост-Steam и не чужой бокс).
+      // На этом этапе статус становится 'steam_loading'.
       await this._waitForNewBoxedProcess('steam', prevSteamCount, STEAM_TIMEOUT_MS, STEAM_POLL_MS,
         () => onStatus('steam_loading', 'Steam загружается...')
       )
 
-      // Ждём пока Steam реально готов: появился sandboxed steamwebhelper.exe
-      // (Steam создаёт его после полного логина и инициализации UI).
-      // Timeout 90с — продолжаем в любом случае.
-      await this._waitForSteamReady(boxName, steamPath, 90_000)
+      // Запускаем авто-ввод credentials и Steam Guard ПОСЛЕДОВАТЕЛЬНО.
+      // Раньше шёл параллельно с _waitForSteamReady → race condition:
+      // основной поток ставил 'steam_running' через _waitForSteamReady
+      // (по факту появления steamwebhelper.exe, что происходит ДО логина),
+      // одновременно tryAutoInput ставил 'steam_login_form' →
+      // 'steam_entering_creds' → ... — получалась каша статусов.
+      //
+      // Теперь авто-ввод полностью отрабатывает (внутри сам шлёт детальные
+      // статусы через onStep), и только потом мы переходим к 'steam_running'
+      // и запуску CS2. _waitForSteamReady больше не нужен — успех tryAutoInput
+      // = Steam залогинен.
+      let autoInputResult = null
+      try {
+        autoInputResult = await sandboxSteamGuard.tryAutoInput(
+          accountId, creds.login, creds.password, creds.sharedSecret, onStatus
+        )
+        console.log(`[CS2Launcher ${accountId}] Steam auto-input result: ${autoInputResult.reason}`)
+      } catch (err) {
+        console.log(`[CS2Launcher ${accountId}] Steam auto-input error: ${err.message}`)
+      }
+
+      // Если авто-ввод не справился — НЕ ставим steam_running сразу, иначе
+      // статус подскакивает: error → В Steam → Запуск CS2 — хотя по факту
+      // пользователь ещё на форме входа Steam. Вместо этого ждём пока в
+      // системе появится sandboxed окно главного UI Steam (size ≥ 1200x700)
+      // — это значит юзер залогинился вручную. Timeout 5 минут.
+      if (!autoInputResult || !autoInputResult.ok) {
+        console.log(`[CS2Launcher ${accountId}] auto-input failed, waiting for manual login (main Steam UI)...`)
+        onStatus('awaiting_guard', 'Ожидание ручного входа в Steam...')
+        const ok = await sandboxSteamGuard.waitForMainSteamUI(300_000)
+        if (!ok) {
+          throw new Error('Steam не залогинился за 5 минут (нет главного окна). Проверь авторизацию вручную.')
+        }
+      } else {
+        // Auto-input успешный — Steam точно залогинен. Короткая пауза для
+        // того чтобы main UI успел отрисоваться перед запуском CS2.
+        await sandboxSteamGuard.waitForMainSteamUI(30_000)
+      }
+
       onStatus('steam_running', 'Steam авторизован')
-      // Минимум 1.2с на статус steam_running перед переходом к cs2_launching
-      await new Promise(r => setTimeout(r, 1200))
+      await new Promise(r => setTimeout(r, 800))
 
       // Извлекаем SteamID из sandbox loginusers.vdf и сохраняем в БД для GSI routing.
       // Steam пишет файл с задержкой после логина — пробуем несколько раз.

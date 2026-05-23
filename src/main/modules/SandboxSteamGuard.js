@@ -18,7 +18,11 @@ const PS_DIR = join(tmpdir(), 'cs2farmpanel-ps-guard')
 const POLL_TIMEOUT      = 600_000  // 10 мин — первый запуск Steam в боксе скачивает клиент
 const POLL_INTERVAL     = 1500
 const CODE_SUBMIT_WAIT  = 5000
-const MAX_RETRIES       = 3
+// Только 1 попытка ввода Guard — Steam агрессивно банит за частые failed
+// попытки ("Слишком много попыток" → 15-30 минут блокировки IP). Если 1
+// попытка с правильным autoDelay не сработала — это либо неверный
+// shared_secret, либо timing — повторять автоматически опасно.
+const MAX_RETRIES       = 1
 const MIN_CODE_LIFETIME = 3
 const POST_LOGIN_WAIT   = 4000
 // Окно "Войти в Steam" создаётся с готовым title, но CEF внутри рисуется ~5-10с.
@@ -213,6 +217,14 @@ class SandboxSteamGuard {
 
       const found = this._classifyWindows(sandboxed)
 
+      // Steam показал "Слишком много попыток" — не пытаемся дальше, это
+      // временный бан 15-30 мин. Выводим понятный статус и выходим.
+      if (found.rateLimited) {
+        console.log(`[SandboxSteamGuard ${accountId}] Steam rate limit detected — too many failed attempts. Wait 15-30 min or change IP.`)
+        step('error', 'Steam: слишком много попыток. Подожди 15-30 мин или смени IP')
+        return { ok: false, reason: 'rate_limited' }
+      }
+
       if (found.login && !loginSubmitted) {
         if (!login || !password) {
           console.log(`[SandboxSteamGuard ${accountId}] login dialog detected but no credentials — skip`)
@@ -336,6 +348,7 @@ class SandboxSteamGuard {
   _classifyWindows(windows) {
     let guard = null, guardInfo = '', guardRect = null
     let bestLogin = null
+    let rateLimited = false
 
     for (const w of windows) {
       if (!w.visible) continue
@@ -345,6 +358,14 @@ class SandboxSteamGuard {
       const title     = cleanRaw.toLowerCase()
       const cls       = w.class || ''
       const area      = w.width * w.height
+
+      // Rate limit ошибка Steam: "Слишком много попыток" / "Too many attempts"
+      if (title.includes('слишком много попыток') ||
+          title.includes('too many') ||
+          title.includes('too many login') ||
+          title.includes('too many failed')) {
+        rateLimited = true
+      }
 
       // Guard: явный indicator в title
       if (title.includes('steam guard') ||
@@ -402,6 +423,7 @@ class SandboxSteamGuard {
       guard,
       guardRect,
       guardInfo,
+      rateLimited,
     }
   }
 
@@ -496,18 +518,20 @@ class SandboxSteamGuard {
           await this._focusField(cx, cy)
         }
 
-        for (const ch of code) {
-          const key = this._charToKey(ch)
-          if (key) {
-            await keyboard.pressKey(key)
-            await this._sleep(60)
-            await keyboard.releaseKey(key)
-            await this._sleep(60)
-          }
+        // Быстрый ввод кода через keyboard.type. autoDelay 45мс — компромисс:
+        // быстрее старых 60+60ms между press/release, но достаточно медленно
+        // чтобы CEF успел обработать каждый символ. С 25мс терял символы
+        // и Steam отклонял код как неполный (4 цифры из 5).
+        const prevDelay = keyboard.config.autoDelayMs
+        try {
+          keyboard.config.autoDelayMs = 45
+          await keyboard.type(code)
+        } finally {
+          keyboard.config.autoDelayMs = prevDelay
         }
-        await this._sleep(200)
+        await this._sleep(150)
         await keyboard.pressKey(Key.Enter)
-        await this._sleep(60)
+        await this._sleep(40)
         await keyboard.releaseKey(Key.Enter)
       } catch (e) {
         console.log(`[SandboxSteamGuard ${accountId}] keyboard input error: ${e.message}`)
@@ -565,6 +589,29 @@ class SandboxSteamGuard {
     const w = all.find(x => Number(x.hwnd) === Number(hwnd))
     if (!w || !w.visible) return null
     return { left: w.left, top: w.top, width: w.width, height: w.height }
+  }
+
+  // Ждёт пока в системе появится sandboxed окно Steam с размером главного UI
+  // (≥ MAIN_UI_AREA_THRESHOLD). Это надёжный признак что пользователь
+  // (вручную или автоматически) залогинился — после login Steam показывает
+  // большое окно с библиотекой/магазином. До логина окно входа маленькое.
+  // Возвращает true если main UI появилось, false если timeout.
+  async waitForMainSteamUI(timeoutMs = 300_000, pollMs = 1500) {
+    this._ensureScripts()
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const all = this._enumSteamWindows()
+      const sandboxed = all.filter(w =>
+        w.visible &&
+        ((w.title || '').includes('[#]') || (w.class || '').startsWith('Sandbox:'))
+      )
+      const mainUi = sandboxed.find(w => (w.width * w.height) >= MAIN_UI_AREA_THRESHOLD)
+      if (mainUi) {
+        return true
+      }
+      await this._sleep(pollMs)
+    }
+    return false
   }
 
   _isWindowVisible(hwnd) {
