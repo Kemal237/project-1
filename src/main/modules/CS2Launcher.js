@@ -92,9 +92,10 @@ class CS2Launcher extends EventEmitter {
 
       // Параллельно запускаем автоматический ввод credentials и Steam Guard кода.
       // Обрабатывает 2 типа окон: login dialog (логин+пароль) и Guard dialog (5-знач код).
-      // Не блокируем основной поток — если ни одно окно не появится (cached ssfn) timeout 60с.
-      // Если auto-input провалился — fallback: пользователь введёт вручную в Steam UI.
-      sandboxSteamGuard.tryAutoInput(accountId, creds.login, creds.password, creds.sharedSecret).then(result => {
+      // Передаём onStatus как onStep — модуль сам шлёт детальные статусы
+      // через ключевые точки (нашли окно входа, вводим логин/пароль, нашли Guard,
+      // вводим Guard код, успех). Если ни одно окно не появится (cached ssfn) timeout.
+      sandboxSteamGuard.tryAutoInput(accountId, creds.login, creds.password, creds.sharedSecret, onStatus).then(result => {
         console.log(`[CS2Launcher ${accountId}] Steam auto-input result: ${result.reason}`)
       }).catch(err => {
         console.log(`[CS2Launcher ${accountId}] Steam auto-input error: ${err.message}`)

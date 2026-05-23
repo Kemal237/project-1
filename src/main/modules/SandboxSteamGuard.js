@@ -25,8 +25,18 @@ const POST_LOGIN_WAIT   = 4000
 // Если ввести сразу — данные уйдут в пустоту. Ждём перед первым вводом.
 const LOGIN_FORM_RENDER_WAIT = 8000
 // Сколько ждать после ввода логина прежде чем считать что Steam показал Guard форму
-// в том же окне (CEF меняет HTML, hwnd и title остаются прежние).
-const POST_LOGIN_GUARD_WAIT  = 5000
+// в том же окне. CEF держит тот же hwnd, title И размер — детектируем только
+// по таймауту (если окно живо через N секунд после ввода логина → Guard).
+const POST_LOGIN_GUARD_WAIT  = 3000
+// Если размер окна вырос ≥ MAIN_UI_AREA_THRESHOLD — это значит Steam успешно
+// залогинился и переключился на главный UI (он гораздо больше login/guard форм).
+// Это всё ещё работает для определения SUCCESS (login_accepted).
+const MAIN_UI_AREA_THRESHOLD = 1_200 * 700
+// Пауза после клика мыши на input поле — даём CEF время поставить фокус.
+// Стандартные 200-300мс не хватает в Sandboxie + новый CEF Steam.
+const FOCUS_WAIT_AFTER_CLICK = 800
+// Скорость ввода — слишком быстрый type в CEF теряет символы.
+const TYPE_AUTODELAY_MS      = 75
 
 // PS-скрипт: возвращает ВСЕ top-level окна с непустым title.
 // Фильтрация по классу убрана — sandboxed Steam splash имеет нестандартный класс.
@@ -166,12 +176,17 @@ class SandboxSteamGuard {
     }
   }
 
-  async tryAutoInput(accountId, login, password, sharedSecret) {
+  async tryAutoInput(accountId, login, password, sharedSecret, onStep) {
     this._ensureScripts()
     this._seenHwnds.clear()
     this._loginHwnd = null
     this._loginRect = null
     this._loginSubmittedAt = 0
+
+    // Безопасная обёртка — onStep может быть undefined
+    const step = (status, message) => {
+      try { onStep && onStep(status, message) } catch {}
+    }
 
     console.log(`[SandboxSteamGuard ${accountId}] waiting for Steam window (max ${POLL_TIMEOUT / 1000}s)...`)
     let loginSubmitted = false
@@ -204,16 +219,22 @@ class SandboxSteamGuard {
           return { ok: false, reason: 'no_credentials' }
         }
         console.log(`[SandboxSteamGuard ${accountId}] login dialog hwnd=${found.login} (${found.loginInfo}), waiting ${LOGIN_FORM_RENDER_WAIT/1000}s for CEF form to render...`)
+        step('steam_login_form', 'Окно входа Steam обнаружено')
         await this._sleep(LOGIN_FORM_RENDER_WAIT)
 
         if (!this._isWindowVisible(found.login)) {
           console.log(`[SandboxSteamGuard ${accountId}] login window closed before submit — already accepted`)
+          step('steam_logged_in', 'Авторизация завершена')
           return { ok: true, reason: 'login_already_accepted' }
         }
 
         console.log(`[SandboxSteamGuard ${accountId}] entering credentials...`)
+        step('steam_entering_creds', 'Ввод логина и пароля...')
         const ok = await this._submitLogin(found.login, found.loginRect, login, password)
-        if (!ok) return { ok: false, reason: 'login_failed' }
+        if (!ok) {
+          step('error', 'Не удалось ввести логин/пароль')
+          return { ok: false, reason: 'login_failed' }
+        }
 
         loginSubmitted = true
         // Сохраняем rect окна — CEF UI Steam держит тот же hwnd для Login/Guard/MainUI,
@@ -222,6 +243,7 @@ class SandboxSteamGuard {
         this._loginRect = found.loginRect
         this._loginSubmittedAt = Date.now()
         console.log(`[SandboxSteamGuard ${accountId}] credentials submitted, monitoring window for guard/done...`)
+        step('steam_creds_submitted', 'Логин отправлен, ожидание Steam Guard...')
         await this._sleep(POST_LOGIN_WAIT)
         continue
       }
@@ -230,31 +252,53 @@ class SandboxSteamGuard {
       if (found.guard) {
         if (!sharedSecret) {
           console.log(`[SandboxSteamGuard ${accountId}] Guard window appeared but no shared_secret — manual input needed`)
+          step('awaiting_guard', 'Требуется ручной ввод Steam Guard')
           return { ok: false, reason: 'no_shared_secret' }
         }
         console.log(`[SandboxSteamGuard ${accountId}] Guard window hwnd=${found.guard} (${found.guardInfo}), submitting code...`)
-        return await this._submitGuardCode(accountId, found.guard, found.guardRect || this._loginRect, sharedSecret)
+        step('steam_entering_guard', 'Ввод кода Steam Guard...')
+        const result = await this._submitGuardCode(accountId, found.guard, found.guardRect || this._loginRect, sharedSecret)
+        if (result.ok) step('steam_logged_in', 'Авторизация Steam Guard прошла')
+        else step('error', 'Steam Guard код отклонён')
+        return result
       }
 
-      // После ввода логина — отслеживаем что происходит с тем же CEF окном.
-      // Title часто НЕ меняется (CEF не апдейтит WIN32 title при смене HTML).
-      // Эвристика: окно живо ≥ POST_LOGIN_GUARD_WAIT → считаем что показан Guard.
+      // После ввода логина — отслеживаем СМЕНУ СТРАНИЦЫ через размер окна.
+      // Steam CEF держит тот же hwnd и title для login/guard/main UI, но
+      // меняет РАЗМЕР окна при смене страницы. Это надёжнее чем таймаут.
       if (loginSubmitted && this._loginHwnd) {
         const sinceLogin = Date.now() - this._loginSubmittedAt
-        const stillVisible = this._isWindowVisible(this._loginHwnd)
+        const currRect   = this._getWindowRect(this._loginHwnd)
 
-        if (!stillVisible) {
+        if (!currRect) {
           console.log(`[SandboxSteamGuard ${accountId}] login window closed — login accepted, no Guard required`)
+          step('steam_logged_in', 'Авторизация завершена (без Guard)')
           return { ok: true, reason: 'login_only' }
         }
 
+        const currArea = currRect.width * currRect.height
+
+        // Окно стало главным UI Steam → login принят полностью
+        if (currArea >= MAIN_UI_AREA_THRESHOLD) {
+          console.log(`[SandboxSteamGuard ${accountId}] window grew to ${currRect.width}x${currRect.height} — main Steam UI, login fully accepted`)
+          step('steam_logged_in', 'Авторизация Steam завершена')
+          return { ok: true, reason: 'login_accepted' }
+        }
+
+        // Окно живо ≥ POST_LOGIN_GUARD_WAIT после login → Steam показывает
+        // Guard форму в том же окне (размер CEF не меняет — подтверждено тестами).
         if (sinceLogin >= POST_LOGIN_GUARD_WAIT) {
           if (!sharedSecret) {
-            console.log(`[SandboxSteamGuard ${accountId}] window still open ${Math.floor(sinceLogin/1000)}s after login but no shared_secret — manual Guard input needed`)
+            console.log(`[SandboxSteamGuard ${accountId}] window still open ${Math.floor(sinceLogin/1000)}s after login (${currRect.width}x${currRect.height}), no shared_secret — manual input needed`)
+            step('awaiting_guard', 'Требуется ручной ввод Steam Guard')
             return { ok: false, reason: 'no_shared_secret' }
           }
-          console.log(`[SandboxSteamGuard ${accountId}] window still open ${Math.floor(sinceLogin/1000)}s after login — assuming Guard form, submitting code...`)
-          return await this._submitGuardCode(accountId, this._loginHwnd, this._loginRect, sharedSecret)
+          console.log(`[SandboxSteamGuard ${accountId}] Guard form expected (${currRect.width}x${currRect.height}, ${Math.floor(sinceLogin/1000)}s after login), submitting code...`)
+          step('steam_entering_guard', 'Ввод кода Steam Guard...')
+          const result = await this._submitGuardCode(accountId, this._loginHwnd, currRect, sharedSecret)
+          if (result.ok) step('steam_logged_in', 'Авторизация Steam Guard прошла')
+          else step('error', 'Steam Guard код отклонён')
+          return result
         }
       }
 
@@ -363,64 +407,61 @@ class SandboxSteamGuard {
 
   async _submitLogin(hwnd, rect, login, password) {
     if (!this._activateWindow(hwnd)) return false
-    await this._sleep(500)
+    await this._sleep(700)  // даём окну фокус после активации
 
     try {
-      // Steam CEF login UI: окно ~705x440. Поле "Имя аккаунта" в левой колонке,
-      // под подписью. Координаты пропорциональны (на случай других размеров окна):
-      //   X: ~25% от ширины (левая колонка по центру)
-      //   Y: ~32% от высоты (под заголовком поля)
-      // Поле пароля — Y ~52%.
-      const loginFieldX = rect.left + Math.floor(rect.width * 0.25)
-      const loginFieldY = rect.top  + Math.floor(rect.height * 0.32)
-      const passFieldX  = loginFieldX
-      const passFieldY  = rect.top  + Math.floor(rect.height * 0.52)
+      // Steam CEF login UI: окно ~705x440. Поле "Имя аккаунта" в левой колонке.
+      //   X: ~25% от ширины (левая колонка)
+      //   Y: ~32% (поле логина) и ~52% (поле пароля) от высоты
+      const loginX = rect.left + Math.floor(rect.width  * 0.25)
+      const loginY = rect.top  + Math.floor(rect.height * 0.32)
+      const passX  = loginX
+      const passY  = rect.top  + Math.floor(rect.height * 0.52)
 
-      // Сохраним прежнее autoDelayMs у мыши и keyboard
-      const prevMouseDelay = mouse.config.autoDelayMs
-      mouse.config.autoDelayMs = 50
+      // Поля чистые при первом запуске — стирание не нужно. Только клик
+      // (для фокуса) → пауза → ввод. Пауза после клика обязательна.
+      await this._focusField(loginX, loginY)
+      await this._typeSlow(login)
+      await this._sleep(400)
 
-      // Клик по полю логина → фокус
-      await mouse.setPosition(new Point(loginFieldX, loginFieldY))
-      await this._sleep(80)
-      await mouse.click(Button.LEFT)
-      await this._sleep(250)
-
-      // Очистим поле на случай auto-fill
-      await keyboard.pressKey(Key.LeftControl, Key.A)
-      await keyboard.releaseKey(Key.LeftControl, Key.A)
-      await this._sleep(80)
-      await keyboard.pressKey(Key.Delete)
-      await keyboard.releaseKey(Key.Delete)
-      await this._sleep(100)
-
-      await this._typeString(login)
-      await this._sleep(250)
-
-      // Клик по полю пароля → фокус (надёжнее чем Tab, он может уйти на checkbox/QR)
-      await mouse.setPosition(new Point(passFieldX, passFieldY))
-      await this._sleep(80)
-      await mouse.click(Button.LEFT)
-      await this._sleep(250)
-
-      await keyboard.pressKey(Key.LeftControl, Key.A)
-      await keyboard.releaseKey(Key.LeftControl, Key.A)
-      await this._sleep(80)
-      await keyboard.pressKey(Key.Delete)
-      await keyboard.releaseKey(Key.Delete)
-      await this._sleep(100)
-
-      await this._typeString(password)
-      await this._sleep(250)
+      await this._focusField(passX, passY)
+      await this._typeSlow(password)
+      await this._sleep(400)
 
       await keyboard.pressKey(Key.Enter)
       await keyboard.releaseKey(Key.Enter)
-
-      mouse.config.autoDelayMs = prevMouseDelay
       return true
     } catch (e) {
       console.log(`[SandboxSteamGuard] _submitLogin error: ${e.message}`)
       return false
+    }
+  }
+
+  // Фокус на input через одиночный клик + большая пауза.
+  // Без очистки — поля на чистом запуске пустые.
+  // FOCUS_WAIT_AFTER_CLICK (800мс) обязателен — Sandboxie+CEF медленно
+  // обрабатывают клик, без паузы первые символы type улетают мимо.
+  async _focusField(x, y) {
+    try {
+      await mouse.setPosition(new Point(x, y))
+      await this._sleep(100)
+      await mouse.pressButton(Button.LEFT)
+      await this._sleep(50)
+      await mouse.releaseButton(Button.LEFT)
+      await this._sleep(FOCUS_WAIT_AFTER_CLICK)
+    } catch (e) {
+      console.log(`[SandboxSteamGuard] _focusField error: ${e.message}`)
+    }
+  }
+
+  // Медленный ввод — стандартный 35мс autoDelay в CEF теряет символы.
+  async _typeSlow(str) {
+    const prev = keyboard.config.autoDelayMs
+    try {
+      keyboard.config.autoDelayMs = TYPE_AUTODELAY_MS
+      await keyboard.type(str)
+    } finally {
+      keyboard.config.autoDelayMs = prev
     }
   }
 
@@ -444,38 +485,27 @@ class SandboxSteamGuard {
       await this._sleep(400)
 
       try {
-        // Steam Guard CEF UI: 5-значное поле для кода обычно в центре окна.
-        // Y ~45% от высоты, X центр (50%). Если rect не передан — fallback
-        // на простую активацию без клика мыши.
+        // Steam Guard CEF UI: 5-значное поле для кода в верхней-средней части
+        // окна (под заголовком "Подтвердите вход"). Координата Y ~40%.
+        // Поле пустое при первом показе — стирание не нужно, только клик
+        // для фокуса + пауза + ввод цифр.
         if (rect) {
           const cx = rect.left + Math.floor(rect.width  * 0.50)
-          const cy = rect.top  + Math.floor(rect.height * 0.45)
-          const prevMouseDelay = mouse.config.autoDelayMs
-          mouse.config.autoDelayMs = 50
-          await mouse.setPosition(new Point(cx, cy))
-          await this._sleep(80)
-          await mouse.click(Button.LEFT)
-          await this._sleep(250)
-          mouse.config.autoDelayMs = prevMouseDelay
+          const cy = rect.top  + Math.floor(rect.height * 0.40)
+          console.log(`[SandboxSteamGuard ${accountId}] clicking Guard field at (${cx}, ${cy}) — window ${rect.width}x${rect.height}@(${rect.left},${rect.top})`)
+          await this._focusField(cx, cy)
         }
-
-        await keyboard.pressKey(Key.LeftControl, Key.A)
-        await keyboard.releaseKey(Key.LeftControl, Key.A)
-        await this._sleep(60)
-        await keyboard.pressKey(Key.Delete)
-        await keyboard.releaseKey(Key.Delete)
-        await this._sleep(100)
 
         for (const ch of code) {
           const key = this._charToKey(ch)
           if (key) {
             await keyboard.pressKey(key)
-            await this._sleep(50)
+            await this._sleep(60)
             await keyboard.releaseKey(key)
-            await this._sleep(50)
+            await this._sleep(60)
           }
         }
-        await this._sleep(150)
+        await this._sleep(200)
         await keyboard.pressKey(Key.Enter)
         await this._sleep(60)
         await keyboard.releaseKey(Key.Enter)
@@ -526,6 +556,15 @@ class SandboxSteamGuard {
       await this._sleep(250)
     }
     return false
+  }
+
+  // Возвращает { left, top, width, height } или null если окно закрылось.
+  // Использует уже существующий enum-windows скрипт — фильтруем по hwnd.
+  _getWindowRect(hwnd) {
+    const all = this._enumSteamWindows()
+    const w = all.find(x => Number(x.hwnd) === Number(hwnd))
+    if (!w || !w.visible) return null
+    return { left: w.left, top: w.top, width: w.width, height: w.height }
   }
 
   _isWindowVisible(hwnd) {

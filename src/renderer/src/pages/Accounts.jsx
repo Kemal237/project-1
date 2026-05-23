@@ -2,58 +2,68 @@ import { useEffect, useState, useCallback } from 'react'
 import { Plus, Upload, Trash2, RefreshCw, Loader, ShieldCheck, ShieldOff, Shield, Search, Play, Square, Package, Pencil, Smartphone, ArrowLeftRight, Gamepad2, ChevronLeft, ChevronRight, Bot } from 'lucide-react'
 
 const STATUS_BADGE = {
-  online:           'badge-green',
-  farming:          'badge-green',
-  lobby:            'badge-blue',
-  steam_launching:  'badge-yellow',
-  steam_loading:    'badge-yellow',
-  steam_running:    'badge-blue',
-  cs2_preparing:    'badge-yellow',
-  cs2_launching:    'badge-yellow',
-  cs2_searching:    'badge-yellow',
-  cs2_loading:      'badge-yellow',
-  cs2_match_loading:'badge-yellow',
-  cs2_match:        'badge-green',
-  cs2_in_match:     'badge-green',
-  cs2_lobby:        'badge-blue',
-  connecting:       'badge-yellow',
-  reconnecting:     'badge-yellow',
-  idle:             'badge-gray',
-  no_prime:         'badge-orange',
-  banned:           'badge-red',
-  error:            'badge-red',
-  warmup:           'badge-yellow',
-  awaiting_guard:   'badge-yellow',
+  online:                'badge-green',
+  farming:               'badge-green',
+  lobby:                 'badge-blue',
+  steam_launching:       'badge-yellow',
+  steam_loading:         'badge-yellow',
+  steam_login_form:      'badge-yellow',
+  steam_entering_creds:  'badge-yellow',
+  steam_creds_submitted: 'badge-yellow',
+  steam_entering_guard:  'badge-yellow',
+  steam_logged_in:       'badge-green',
+  steam_running:         'badge-blue',
+  cs2_preparing:         'badge-yellow',
+  cs2_launching:         'badge-yellow',
+  cs2_searching:         'badge-yellow',
+  cs2_loading:           'badge-yellow',
+  cs2_match_loading:     'badge-yellow',
+  cs2_match:             'badge-green',
+  cs2_in_match:          'badge-green',
+  cs2_lobby:             'badge-blue',
+  connecting:            'badge-yellow',
+  reconnecting:          'badge-yellow',
+  idle:                  'badge-gray',
+  no_prime:              'badge-orange',
+  banned:                'badge-red',
+  error:                 'badge-red',
+  warmup:                'badge-yellow',
+  awaiting_guard:        'badge-yellow',
 }
 
 const STATUS_LABEL = {
-  online:           'Онлайн',
-  farming:          'Фармит',
-  lobby:            'В лобби',
-  steam_launching:  'Запуск Steam',
-  steam_loading:    'Steam загружается',
-  steam_running:    'В Steam',
-  cs2_preparing:    'Подготовка',
-  cs2_launching:    'Запуск CS2',
-  cs2_searching:    'Ищет матч',
-  cs2_loading:      'CS2 загружается',
-  cs2_match_loading:'Загрузка матча',
-  cs2_match:        'В матче',
-  cs2_in_match:     'В матче',
-  cs2_lobby:        'В лобби',
-  connecting:       'Подключение...',
-  reconnecting:     'Реконнект...',
-  idle:             'Офлайн',
-  no_prime:         'Нет Prime',
-  banned:           'Забанен',
-  error:            'Ошибка',
-  warmup:           'Прогрев',
-  awaiting_guard:   'Введи код',
+  online:                'Онлайн',
+  farming:               'Фармит',
+  lobby:                 'В лобби',
+  steam_launching:       'Запуск Steam',
+  steam_loading:         'Steam загружается',
+  steam_login_form:      'Окно входа Steam',
+  steam_entering_creds:  'Ввод логина/пароля',
+  steam_creds_submitted: 'Ожидание Steam Guard',
+  steam_entering_guard:  'Ввод кода Steam Guard',
+  steam_logged_in:       'Вход выполнен',
+  steam_running:         'В Steam',
+  cs2_preparing:         'Подготовка',
+  cs2_launching:         'Запуск CS2',
+  cs2_searching:         'Ищет матч',
+  cs2_loading:           'CS2 загружается',
+  cs2_match_loading:     'Загрузка матча',
+  cs2_match:             'В матче',
+  cs2_in_match:          'В матче',
+  cs2_lobby:             'В лобби',
+  connecting:            'Подключение...',
+  reconnecting:          'Реконнект...',
+  idle:                  'Офлайн',
+  no_prime:              'Нет Prime',
+  banned:                'Забанен',
+  error:                 'Ошибка',
+  warmup:                'Прогрев',
+  awaiting_guard:        'Введи код',
 }
 
-const CS2_STATUSES = new Set(['farming', 'lobby', 'steam_launching', 'steam_running', 'cs2_preparing', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_match_loading', 'cs2_in_match', 'cs2_lobby'])
+const CS2_STATUSES = new Set(['farming', 'lobby', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_preparing', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_match_loading', 'cs2_in_match', 'cs2_lobby'])
 
-const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'no_prime', 'steam_launching', 'steam_loading', 'steam_running'])
+const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'no_prime', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running'])
 
 function playBeep() {
   try {
@@ -524,7 +534,7 @@ export default function Accounts() {
     setGuardIndex(i => Math.max(0, i - 1))
   }
 
-  const CS2_ACTIVE = new Set(['cs2_preparing', 'steam_launching', 'steam_loading', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
+  const CS2_ACTIVE = new Set(['cs2_preparing', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
 
   const handleStartCS2 = async (id) => { await window.api.launcher.start(id) }
 
