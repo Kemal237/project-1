@@ -24,8 +24,9 @@ const POST_LOGIN_WAIT   = 4000
 // Окно "Войти в Steam" создаётся с готовым title, но CEF внутри рисуется ~5-10с.
 // Если ввести сразу — данные уйдут в пустоту. Ждём перед первым вводом.
 const LOGIN_FORM_RENDER_WAIT = 8000
-const LOGIN_RETRY_MAX        = 3
-const LOGIN_RETRY_WAIT       = 6000
+// Сколько ждать после ввода логина прежде чем считать что Steam показал Guard форму
+// в том же окне (CEF меняет HTML, hwnd и title остаются прежние).
+const POST_LOGIN_GUARD_WAIT  = 5000
 
 // PS-скрипт: возвращает ВСЕ top-level окна с непустым title.
 // Фильтрация по классу убрана — sandboxed Steam splash имеет нестандартный класс.
@@ -147,6 +148,9 @@ class SandboxSteamGuard {
   constructor() {
     this._scriptsWritten = false
     this._seenHwnds = new Set()  // hwnd-ы которые уже логировались (чтоб не спамить)
+    this._loginHwnd = null
+    this._loginRect = null
+    this._loginSubmittedAt = 0
   }
 
   _ensureScripts() {
@@ -165,6 +169,9 @@ class SandboxSteamGuard {
   async tryAutoInput(accountId, login, password, sharedSecret) {
     this._ensureScripts()
     this._seenHwnds.clear()
+    this._loginHwnd = null
+    this._loginRect = null
+    this._loginSubmittedAt = 0
 
     console.log(`[SandboxSteamGuard ${accountId}] waiting for Steam window (max ${POLL_TIMEOUT / 1000}s)...`)
     let loginSubmitted = false
@@ -199,46 +206,56 @@ class SandboxSteamGuard {
         console.log(`[SandboxSteamGuard ${accountId}] login dialog hwnd=${found.login} (${found.loginInfo}), waiting ${LOGIN_FORM_RENDER_WAIT/1000}s for CEF form to render...`)
         await this._sleep(LOGIN_FORM_RENDER_WAIT)
 
-        // Retry: первая попытка может ещё попасть в недогруженную форму
-        let submitted = false
-        for (let attempt = 1; attempt <= LOGIN_RETRY_MAX; attempt++) {
-          if (!this._isWindowVisible(found.login)) {
-            console.log(`[SandboxSteamGuard ${accountId}] login window closed before attempt ${attempt} — already accepted`)
-            submitted = true
-            break
-          }
-          console.log(`[SandboxSteamGuard ${accountId}] entering credentials, attempt ${attempt}/${LOGIN_RETRY_MAX}...`)
-          const ok = await this._submitLogin(found.login, found.loginRect, login, password)
-          if (!ok) {
-            console.log(`[SandboxSteamGuard ${accountId}] submit failed on attempt ${attempt}`)
-            if (attempt === LOGIN_RETRY_MAX) return { ok: false, reason: 'login_failed' }
-            await this._sleep(LOGIN_RETRY_WAIT)
-            continue
-          }
-          // Ждём — если окно закрылось/изменилось → принято; если осталось → повторим
-          await this._sleep(LOGIN_RETRY_WAIT)
-          if (!this._isWindowVisible(found.login)) {
-            console.log(`[SandboxSteamGuard ${accountId}] login accepted on attempt ${attempt} (window closed)`)
-            submitted = true
-            break
-          }
-          console.log(`[SandboxSteamGuard ${accountId}] login window still open after attempt ${attempt}, retrying...`)
+        if (!this._isWindowVisible(found.login)) {
+          console.log(`[SandboxSteamGuard ${accountId}] login window closed before submit — already accepted`)
+          return { ok: true, reason: 'login_already_accepted' }
         }
-        if (!submitted) {
-          console.log(`[SandboxSteamGuard ${accountId}] all ${LOGIN_RETRY_MAX} login attempts done, window still open — continue polling for guard/error`)
-        }
+
+        console.log(`[SandboxSteamGuard ${accountId}] entering credentials...`)
+        const ok = await this._submitLogin(found.login, found.loginRect, login, password)
+        if (!ok) return { ok: false, reason: 'login_failed' }
+
         loginSubmitted = true
+        // Сохраняем rect окна — CEF UI Steam держит тот же hwnd для Login/Guard/MainUI,
+        // переключая HTML-содержимое. Нам нужны координаты для последующего клика на Guard.
+        this._loginHwnd = found.login
+        this._loginRect = found.loginRect
+        this._loginSubmittedAt = Date.now()
+        console.log(`[SandboxSteamGuard ${accountId}] credentials submitted, monitoring window for guard/done...`)
         await this._sleep(POST_LOGIN_WAIT)
         continue
       }
 
+      // Явный Guard window (Steam дал ему отдельный hwnd или сменил title)
       if (found.guard) {
         if (!sharedSecret) {
           console.log(`[SandboxSteamGuard ${accountId}] Guard window appeared but no shared_secret — manual input needed`)
           return { ok: false, reason: 'no_shared_secret' }
         }
         console.log(`[SandboxSteamGuard ${accountId}] Guard window hwnd=${found.guard} (${found.guardInfo}), submitting code...`)
-        return await this._submitGuardCode(accountId, found.guard, sharedSecret)
+        return await this._submitGuardCode(accountId, found.guard, found.guardRect || this._loginRect, sharedSecret)
+      }
+
+      // После ввода логина — отслеживаем что происходит с тем же CEF окном.
+      // Title часто НЕ меняется (CEF не апдейтит WIN32 title при смене HTML).
+      // Эвристика: окно живо ≥ POST_LOGIN_GUARD_WAIT → считаем что показан Guard.
+      if (loginSubmitted && this._loginHwnd) {
+        const sinceLogin = Date.now() - this._loginSubmittedAt
+        const stillVisible = this._isWindowVisible(this._loginHwnd)
+
+        if (!stillVisible) {
+          console.log(`[SandboxSteamGuard ${accountId}] login window closed — login accepted, no Guard required`)
+          return { ok: true, reason: 'login_only' }
+        }
+
+        if (sinceLogin >= POST_LOGIN_GUARD_WAIT) {
+          if (!sharedSecret) {
+            console.log(`[SandboxSteamGuard ${accountId}] window still open ${Math.floor(sinceLogin/1000)}s after login but no shared_secret — manual Guard input needed`)
+            return { ok: false, reason: 'no_shared_secret' }
+          }
+          console.log(`[SandboxSteamGuard ${accountId}] window still open ${Math.floor(sinceLogin/1000)}s after login — assuming Guard form, submitting code...`)
+          return await this._submitGuardCode(accountId, this._loginHwnd, this._loginRect, sharedSecret)
+        }
       }
 
       await this._sleep(POLL_INTERVAL)
@@ -273,7 +290,7 @@ class SandboxSteamGuard {
   }
 
   _classifyWindows(windows) {
-    let guard = null, guardInfo = ''
+    let guard = null, guardInfo = '', guardRect = null
     let bestLogin = null
 
     for (const w of windows) {
@@ -291,7 +308,8 @@ class SandboxSteamGuard {
           title.includes('авторизация компьютера') ||
           title.includes('подтверждение steam guard')) {
         guard = w.hwnd
-        guardInfo = `${w.width}x${w.height} "${rawTitle}"`
+        guardInfo = `${w.width}x${w.height}@(${w.left},${w.top}) "${rawTitle}"`
+        guardRect = { left: w.left, top: w.top, width: w.width, height: w.height }
         continue
       }
 
@@ -338,6 +356,7 @@ class SandboxSteamGuard {
       loginRect: bestLogin ? { left: bestLogin.left, top: bestLogin.top, width: bestLogin.width, height: bestLogin.height } : null,
       loginInfo: bestLogin?.info || '',
       guard,
+      guardRect,
       guardInfo,
     }
   }
@@ -405,7 +424,7 @@ class SandboxSteamGuard {
     }
   }
 
-  async _submitGuardCode(accountId, hwnd, sharedSecret) {
+  async _submitGuardCode(accountId, hwnd, rect, sharedSecret) {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       if (!this._isWindowVisible(hwnd)) {
         console.log(`[SandboxSteamGuard ${accountId}] Guard window closed before attempt ${attempt} — likely accepted`)
@@ -422,9 +441,24 @@ class SandboxSteamGuard {
         await this._sleep(2000)
         continue
       }
-      await this._sleep(300)
+      await this._sleep(400)
 
       try {
+        // Steam Guard CEF UI: 5-значное поле для кода обычно в центре окна.
+        // Y ~45% от высоты, X центр (50%). Если rect не передан — fallback
+        // на простую активацию без клика мыши.
+        if (rect) {
+          const cx = rect.left + Math.floor(rect.width  * 0.50)
+          const cy = rect.top  + Math.floor(rect.height * 0.45)
+          const prevMouseDelay = mouse.config.autoDelayMs
+          mouse.config.autoDelayMs = 50
+          await mouse.setPosition(new Point(cx, cy))
+          await this._sleep(80)
+          await mouse.click(Button.LEFT)
+          await this._sleep(250)
+          mouse.config.autoDelayMs = prevMouseDelay
+        }
+
         await keyboard.pressKey(Key.LeftControl, Key.A)
         await keyboard.releaseKey(Key.LeftControl, Key.A)
         await this._sleep(60)
