@@ -2,6 +2,7 @@ import { execSync } from 'child_process'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { clipboard } from 'electron'
 import { keyboard, Key, mouse, Point, Button } from '@nut-tree-fork/nut-js'
 import SteamTotp from 'steam-totp'
 
@@ -39,8 +40,6 @@ const MAIN_UI_AREA_THRESHOLD = 1_200 * 700
 // Пауза после клика мыши на input поле — даём CEF время поставить фокус.
 // Стандартные 200-300мс не хватает в Sandboxie + новый CEF Steam.
 const FOCUS_WAIT_AFTER_CLICK = 800
-// Скорость ввода — слишком быстрый type в CEF теряет символы.
-const TYPE_AUTODELAY_MS      = 75
 
 // PS-скрипт: возвращает ВСЕ top-level окна с непустым title.
 // Фильтрация по классу убрана — sandboxed Steam splash имеет нестандартный класс.
@@ -440,18 +439,23 @@ class SandboxSteamGuard {
       const passX  = loginX
       const passY  = rect.top  + Math.floor(rect.height * 0.52)
 
-      // Поля чистые при первом запуске — стирание не нужно. Только клик
-      // (для фокуса) → пауза → ввод. Пауза после клика обязательна.
+      // Clipboard paste вместо keyboard.type: атомарная вставка через Ctrl+V.
+      // keyboard.type теряет первые символы в Sandboxie+CEF (фокус CEF после
+      // mouse-click ставится асинхронно, первые keystroke улетают в окно
+      // до того как caret приземлится в input). Ctrl+V — один keystroke,
+      // буфер уже атомарно содержит весь текст — потерь нет.
       await this._focusField(loginX, loginY)
-      await this._typeSlow(login)
+      await this._pasteText(login)
       await this._sleep(400)
 
       await this._focusField(passX, passY)
-      await this._typeSlow(password)
+      await this._pasteText(password)
       await this._sleep(400)
 
       await keyboard.pressKey(Key.Enter)
       await keyboard.releaseKey(Key.Enter)
+      // TEMP: clipboard.clear() убран для диагностики — чтобы пользователь
+      // мог проверить вручную Ctrl+V что в буфере. Вернуть после фикса.
       return true
     } catch (e) {
       console.log(`[SandboxSteamGuard] _submitLogin error: ${e.message}`)
@@ -476,14 +480,57 @@ class SandboxSteamGuard {
     }
   }
 
-  // Медленный ввод — стандартный 35мс autoDelay в CEF теряет символы.
-  async _typeSlow(str) {
-    const prev = keyboard.config.autoDelayMs
+  // Атомарная вставка текста через системный буфер обмена.
+  // Решает проблему потери первых символов в Sandboxie+CEF: keyboard.type()
+  // шлёт символы по одному через SendInput, и пока CEF не финализировал
+  // focus после клика — первые ~6 keystroke теряются. Ctrl+V — один
+  // keystroke, который вставляет ВЕСЬ текст за один dispatch, поэтому
+  // даже если focus задержался — текст не теряется (последний keystroke
+  // ловится надёжно, в отличие от первых).
+  //
+  // Electron clipboard API синхронный и нативный — гарантия что к моменту
+  // Ctrl+V буфер уже содержит нужный текст (в отличие от PowerShell
+  // Set-Clipboard который спавнится ~500мс async и Ctrl+V улетал раньше).
+  async _pasteText(text) {
     try {
-      keyboard.config.autoDelayMs = TYPE_AUTODELAY_MS
-      await keyboard.type(str)
-    } finally {
-      keyboard.config.autoDelayMs = prev
+      clipboard.writeText(text)
+      const verified = clipboard.readText()
+      if (verified !== text) {
+        console.log(`[SandboxSteamGuard] !!! CLIPBOARD WRITE FAILED: expected ${text.length} chars, got ${verified.length}: "${verified}"`)
+      } else {
+        console.log(`[SandboxSteamGuard] clipboard ok (${text.length} chars)`)
+      }
+      // Длинная пауза после click — CEF финализирует focus ~800мс
+      await this._sleep(800)
+      // Ctrl+A — выделить содержимое (через PowerShell SendKeys, не nut-js)
+      this._sendKeys('^a')
+      await this._sleep(200)
+      // Ctrl+V — вставить (через PowerShell SendKeys)
+      this._sendKeys('^v')
+      await this._sleep(300)
+    } catch (e) {
+      console.log(`[SandboxSteamGuard] _pasteText error: ${e.message}`)
+    }
+  }
+
+  // Шлёт keystroke через PowerShell System.Windows.Forms.SendKeys.
+  // Обход libnut SendInput: Chromium/CEF фильтрует keystroke с KF_REPEAT
+  // флагом который libnut выставляет (Chromium bug 109151). SendKeys
+  // использует другой API (keybd_event) — события проходят в CEF.
+  //
+  // Манульный тест пользователя подтвердил: Ctrl+V физической клавиатуры
+  // вставляет текст из буфера в Steam, но nut-js Ctrl+V не работает.
+  //
+  // Синтаксис: '^' = Ctrl, '%' = Alt, '+' = Shift, '~' = Enter
+  // Пример: '^v' = Ctrl+V, '^a' = Ctrl+A
+  _sendKeys(keys) {
+    try {
+      execSync(
+        `powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${keys}')"`,
+        { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }
+      )
+    } catch (e) {
+      console.log(`[SandboxSteamGuard] _sendKeys('${keys}') error: ${e.message}`)
     }
   }
 
@@ -518,21 +565,14 @@ class SandboxSteamGuard {
           await this._focusField(cx, cy)
         }
 
-        // Быстрый ввод кода через keyboard.type. autoDelay 45мс — компромисс:
-        // быстрее старых 60+60ms между press/release, но достаточно медленно
-        // чтобы CEF успел обработать каждый символ. С 25мс терял символы
-        // и Steam отклонял код как неполный (4 цифры из 5).
-        const prevDelay = keyboard.config.autoDelayMs
-        try {
-          keyboard.config.autoDelayMs = 45
-          await keyboard.type(code)
-        } finally {
-          keyboard.config.autoDelayMs = prevDelay
-        }
+        // Ввод Guard кода через clipboard paste — та же причина что и для
+        // login/password: keyboard.type теряет символы в CEF, Ctrl+V атомарен.
+        await this._pasteText(code)
         await this._sleep(150)
         await keyboard.pressKey(Key.Enter)
         await this._sleep(40)
         await keyboard.releaseKey(Key.Enter)
+        // TEMP: clipboard.clear() убран для диагностики
       } catch (e) {
         console.log(`[SandboxSteamGuard ${accountId}] keyboard input error: ${e.message}`)
         if (attempt === MAX_RETRIES) return { ok: false, reason: 'activation_failed' }
@@ -549,18 +589,6 @@ class SandboxSteamGuard {
     }
     console.log(`[SandboxSteamGuard ${accountId}] all ${MAX_RETRIES} attempts failed`)
     return { ok: false, reason: 'code_rejected' }
-  }
-
-  async _typeString(str) {
-    try {
-      const prevDelay = keyboard.config.autoDelayMs
-      keyboard.config.autoDelayMs = 35
-      await keyboard.type(str)
-      keyboard.config.autoDelayMs = prevDelay
-    } catch (e) {
-      console.log(`[SandboxSteamGuard] _typeString error: ${e.message}`)
-      throw e
-    }
   }
 
   async _generateFreshCode(sharedSecret) {

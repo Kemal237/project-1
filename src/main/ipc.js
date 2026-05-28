@@ -11,6 +11,8 @@ import sandboxieManager    from './modules/SandboxieManager'
 import cs2Launcher        from './modules/CS2Launcher'
 import steamConfigPatcher from './modules/SteamConfigPatcher'
 import botAutomation     from './modules/BotAutomation'
+import inputMutex        from './modules/InputMutex'
+import groupManager      from './modules/GroupManager'
 
 export function setupIPC() {
   // Создаём боксы Sandboxie для всех известных аккаунтов при старте (пока ничего не запущено).
@@ -69,18 +71,33 @@ export function setupIPC() {
   ipcMain.handle('drops:getByAccount', (_, id)      => dropTracker.getByAccount(id))
   ipcMain.handle('drops:getStats',     ()           => dropTracker.getStats())
 
+  ipcMain.handle('groups:getAll',  ()           => groupManager.getAll())
+  ipcMain.handle('groups:get',     (_, id)      => groupManager.get(id))
+  ipcMain.handle('groups:create',  (_, data)    => {
+    try { return { ok: true, ...groupManager.create(data) } }
+    catch (e) { return { ok: false, error: e.message } }
+  })
+  ipcMain.handle('groups:update',  (_, id, data) => {
+    try { groupManager.update(id, data); return { ok: true } }
+    catch (e) { return { ok: false, error: e.message } }
+  })
+  ipcMain.handle('groups:delete',  (_, id)      => {
+    try { groupManager.delete(id); return { ok: true } }
+    catch (e) { return { ok: false, error: e.message } }
+  })
+
   ipcMain.handle('farm:start',    (_, id) => workerManager.start(id))
   ipcMain.handle('farm:stop', async (_, id) => {
     await workerManager.stop(id)
     accountManager.update(id, { status: 'idle' })
-    workerManager.webContents?.send('worker:statusChange', { accountId: id, status: 'idle' })
+    workerManager.send('worker:statusChange', { accountId: id, status: 'idle' })
   })
   ipcMain.handle('farm:stopAll', async () => {
     const ids = [...workerManager.workers.keys()]
     await workerManager.stopAll()
     for (const id of ids) {
       accountManager.update(id, { status: 'idle' })
-      workerManager.webContents?.send('worker:statusChange', { accountId: id, status: 'idle' })
+      workerManager.send('worker:statusChange', { accountId: id, status: 'idle' })
     }
   })
   ipcMain.handle('farm:statuses', ()      => workerManager.getAllStatuses())
@@ -88,31 +105,125 @@ export function setupIPC() {
     workerManager.provideCode(accountId, code)
   )
 
-  ipcMain.handle('launcher:start', async (_, accountId) => {
+  // Возвращает текущее состояние глобального input mutex.
+  // Используется UI чтобы решить — запустить сразу или показать модалку очереди.
+  ipcMain.handle('launcher:mutexState', () => ({
+    locked:     inputMutex.isLocked(),
+    holder:     inputMutex.currentHolder(),
+    queueSize:  inputMutex.queueSize(),
+    queueLabels: inputMutex.queueLabels(),
+  }))
+
+  // Внутренняя функция: запустить CS2 launcher для одного аккаунта.
+  // Используется как из launcher:start (одиночный запуск), так и из
+  // groups:start (запуск всей группы — параллельно, ввод сериализуется mutex'ом).
+  async function startLauncherForAccount(accountId, { useMutex } = {}) {
     const creds = accountManager.getCredentials(accountId)
     if (!creds) return { ok: false, error: 'Аккаунт не найден' }
 
     await workerManager.stop(accountId)
-    accountManager.update(accountId, { status: 'cs2_preparing' })
+    const initialStatus = (useMutex && inputMutex.isLocked()) ? 'queued' : 'cs2_preparing'
+    accountManager.update(accountId, { status: initialStatus })
 
     const send = (status, message) => {
       accountManager.update(accountId, { status })
-      workerManager.webContents?.send('worker:statusChange', { accountId, status, message })
+      workerManager.send('worker:statusChange', { accountId, status, message })
     }
 
-    cs2Launcher.start(accountId, creds, send).catch(err => {
+    if (useMutex && inputMutex.isLocked()) {
+      send('queued', `В очереди (держит: ${inputMutex.currentHolder()})`)
+    }
+
+    cs2Launcher.start(accountId, creds, send, { useMutex: !!useMutex }).catch(err => {
       send('error', err.message)
       cs2Launcher.stop(accountId)
     })
 
     return { ok: true }
-  })
+  }
 
-  ipcMain.handle('launcher:stop', async (_, accountId) => {
+  // Внутренняя функция: остановить CS2 launcher + автоматизацию для аккаунта.
+  function stopLauncherForAccount(accountId) {
     botAutomation.stop(accountId)
     cs2Launcher.stop(accountId)
     accountManager.update(accountId, { status: 'idle' })
-    workerManager.webContents?.send('worker:statusChange', { accountId, status: 'idle' })
+    workerManager.send('worker:statusChange', { accountId, status: 'idle' })
+  }
+
+  // opts.useMutex=true — ввод (логин/пароль/Guard) сериализуется через
+  // глобальный InputMutex. Используется когда параллельно может запускаться
+  // 2+ ботов (групповой запуск или ручной "Запустить в очерёдности").
+  ipcMain.handle('launcher:start', async (_, accountId, opts = {}) =>
+    startLauncherForAccount(accountId, { useMutex: !!opts.useMutex })
+  )
+
+  ipcMain.handle('launcher:stop', async (_, accountId) => {
+    stopLauncherForAccount(accountId)
+    return { ok: true }
+  })
+
+  // Статусы при которых "вход в Steam завершён" — sequential запуск группы
+  // ждёт что аккаунт перейдёт в один из них, прежде чем запустить следующий.
+  // error/idle — терминальные, бот зафейлился или был остановлен.
+  const LOGIN_DONE_STATUSES = new Set([
+    'steam_logged_in', 'steam_running',
+    'cs2_launching', 'cs2_loading', 'cs2_lobby',
+    'cs2_match_loading', 'cs2_match', 'cs2_in_match',
+    'error', 'idle',
+  ])
+
+  // Ждёт пока статус accountId перейдёт в один из LOGIN_DONE_STATUSES
+  // (или истечёт timeout). Используется в groups:start чтобы запускать
+  // следующий бот ТОЛЬКО после того как предыдущий полностью залогинился.
+  async function waitForLoginComplete(accountId, timeoutMs = 600_000, pollMs = 1000) {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const status = accountManager.getStatus(accountId)
+      if (status && LOGIN_DONE_STATUSES.has(status)) return status
+      await new Promise(r => setTimeout(r, pollMs))
+    }
+    return null  // timeout — продолжаем со следующего, не ждём бесконечно
+  }
+
+  // Группа запускается ПОСЛЕДОВАТЕЛЬНО: первый аккаунт стартует, ждём пока он
+  // полностью залогинится (steam_logged_in или дальше), потом второй, и т.д.
+  // Параллельный запуск ломал ввод — два Steam-окна получали клики/символы
+  // одновременно, даже с mutex'ом (mutex захватывался только в момент ввода,
+  // но окна обоих ботов появлялись одновременно и tryAutoInput путался).
+  // Возвращает результаты сразу после старта последнего — UI получает статусы
+  // через broadcast worker:statusChange и обновляется в реальном времени.
+  ipcMain.handle('groups:start', async (_, groupId) => {
+    const group = groupManager.get(groupId)
+    if (!group) return { ok: false, error: 'Группа не найдена' }
+    if (group.accounts.length === 0) return { ok: false, error: 'В группе нет аккаунтов' }
+
+    // Запускаем последовательно — НЕ await Promise.all. Возвращаем сразу OK,
+    // дальше работа идёт в фоне. UI отслеживает через worker:statusChange.
+    ;(async () => {
+      for (const a of group.accounts) {
+        const r = await startLauncherForAccount(a.id, { useMutex: false })
+        if (!r.ok) {
+          console.log(`[groups:start] failed to start ${a.login}: ${r.error}`)
+          continue
+        }
+        // Ждём пока этот аккаунт пройдёт вход — потом следующий.
+        const final = await waitForLoginComplete(a.id)
+        console.log(`[groups:start] ${a.login} login complete with status: ${final || 'TIMEOUT'}`)
+        // Если предыдущий зафейлился или попал в idle (Stop), следующий всё
+        // равно запускается — пользователь решит что делать с конкретным ботом.
+      }
+    })().catch(e => console.log('[groups:start] sequential loop error:', e.message))
+
+    return { ok: true, started: group.accounts.length }
+  })
+
+  // Остановка группы: останавливаем все аккаунты группы.
+  ipcMain.handle('groups:stop', async (_, groupId) => {
+    const group = groupManager.get(groupId)
+    if (!group) return { ok: false, error: 'Группа не найдена' }
+    for (const a of group.accounts) {
+      stopLauncherForAccount(a.id)
+    }
     return { ok: true }
   })
 
@@ -168,7 +279,7 @@ export function setupIPC() {
       const accounts = accountManager.getAll()
       accountManager.resetStatuses()
       for (const a of accounts) {
-        workerManager.webContents?.send('worker:statusChange', { accountId: a.id, status: 'idle' })
+        workerManager.send('worker:statusChange', { accountId: a.id, status: 'idle' })
       }
       return { ok: true }
     } catch (e) {

@@ -10,6 +10,7 @@ import Drops       from './pages/Drops'
 import Proxies     from './pages/Proxies'
 import Settings    from './pages/Settings'
 import AutomationWindow from './pages/AutomationWindow'
+import TrackingWindow   from './pages/TrackingWindow'
 
 const PAGES = {
   dashboard:  Dashboard,
@@ -20,17 +21,22 @@ const PAGES = {
   settings:   Settings,
 }
 
-// Standalone-окно имитации: URL hash `#/automation/<accountId>` → отдельный режим UI.
-// Используется openAutomationWindow() в main process.
-function getAutomationAccountId() {
+// Standalone-окна (hash-routing):
+//   #/automation/<accountId> → AutomationWindow (имитация движения)
+//   #/tracking/<groupId>     → TrackingWindow (трекинг фарм-группы)
+function parseHashRoute() {
   const hash = window.location.hash || ''
-  const m = hash.match(/^#\/automation\/(\d+)$/)
-  return m ? m[1] : null
+  let m = hash.match(/^#\/automation\/(\d+)$/)
+  if (m) return { type: 'automation', id: m[1] }
+  m = hash.match(/^#\/tracking\/(\d+)$/)
+  if (m) return { type: 'tracking', id: m[1] }
+  return null
 }
 
 export default function App() {
-  const automationId = getAutomationAccountId()
-  if (automationId) return <AutomationWindow accountId={automationId} />
+  const route = parseHashRoute()
+  if (route?.type === 'automation') return <AutomationWindow accountId={route.id} />
+  if (route?.type === 'tracking')   return <TrackingWindow groupId={route.id} />
   return <MainApp />
 }
 

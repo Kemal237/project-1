@@ -70,6 +70,60 @@ function openAutomationWindow(accountId) {
   return win
 }
 
+// Окно отслеживания фарм-группы. Один groupId = одно окно (повторный вызов
+// фокусирует существующее). Подвижное (frame: false, но с кастомным
+// drag-titlebar), удобно положить рядом с CS2.
+const _trackingWindows = new Map()
+function openTrackingWindow(groupId) {
+  const existing = _trackingWindows.get(groupId)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return existing
+  }
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 760,
+    minWidth: 960,
+    minHeight: 560,
+    frame: false,
+    backgroundColor: '#0d1117',
+    title: `Отслеживание группы #${groupId}`,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  })
+
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+    ?.replace('localhost', '127.0.0.1')
+  const url = devUrl
+    ? `${devUrl}#/tracking/${groupId}`
+    : `file://${join(__dirname, '../renderer/index.html')}#/tracking/${groupId}`
+
+  if (devUrl) {
+    const tryLoad = (attempts) => {
+      win.loadURL(url).catch(() => {
+        if (attempts > 0) setTimeout(() => tryLoad(attempts - 1), 500)
+      })
+    }
+    setTimeout(() => tryLoad(20), 200)
+  } else {
+    win.loadURL(url)
+  }
+
+  win.webContents.on('before-input-event', (_, input) => {
+    if ((input.control && input.shift && input.key === 'I') || input.key === 'F12') {
+      win.webContents.toggleDevTools()
+    }
+  })
+
+  win.on('closed', () => _trackingWindows.delete(groupId))
+  _trackingWindows.set(groupId, win)
+  return win
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1400,
@@ -154,6 +208,12 @@ app.whenReady().then(async () => {
   // Окно имитации — открывается отдельным BrowserWindow для удобной работы рядом с CS2.
   ipcMain.handle('automation:openWindow', (_, accountId) => {
     openAutomationWindow(accountId)
+    return { ok: true }
+  })
+
+  // Окно отслеживания фарм-группы — отдельный BrowserWindow.
+  ipcMain.handle('groups:openTracking', (_, groupId) => {
+    openTrackingWindow(groupId)
     return { ok: true }
   })
 

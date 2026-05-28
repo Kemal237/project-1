@@ -1,38 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw, Folder, Check, Trash2, Zap } from 'lucide-react'
-
-function KillAllSection() {
-  const [killing, setKilling] = useState(false)
-  const [done,    setDone]    = useState(false)
-
-  const killAll = async () => {
-    setKilling(true)
-    setDone(false)
-    await window.api.sandboxie.killAll()
-    setKilling(false)
-    setDone(true)
-    setTimeout(() => setDone(false), 3000)
-  }
-
-  return (
-    <div className="border-t border-border pt-3">
-      <div className="flex items-center justify-between">
-        <div className="space-y-0.5">
-          <p className="text-sm text-text-primary">Принудительная остановка</p>
-          <p className="text-xs text-text-muted">Убить все процессы Steam и CS2 в боксах</p>
-        </div>
-        <button
-          className="btn-ghost p-1.5 text-red-400 hover:text-red-300 disabled:opacity-50"
-          onClick={killAll}
-          disabled={killing}
-          title="Принудительно закрыть все процессы Sandboxie"
-        >
-          {killing ? <Loader size={14} className="animate-spin" /> : done ? <CheckCircle size={14} className="text-green-400" /> : <Zap size={14} />}
-        </button>
-      </div>
-    </div>
-  )
-}
+import { Save, Key, Box, Download, RefreshCw, CheckCircle, AlertCircle, Loader, RotateCcw, Folder, Check, Trash2 } from 'lucide-react'
 
 function UpdatesSection() {
   // — Updater —
@@ -194,7 +161,6 @@ function UpdatesSection() {
         </>
       )}
 
-      {sbStatus?.installed && <KillAllSection />}
     </div>
   )
 }

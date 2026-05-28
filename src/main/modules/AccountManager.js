@@ -120,6 +120,14 @@ class AccountManager {
     const r = db.get('SELECT id, login, status FROM accounts WHERE steam_id = ?', [String(steamId64)])
     return r || null
   }
+
+  // Чтение текущего статуса напрямую из БД. Используется в groups:start
+  // для polling — sequential запуск ждёт пока статус не станет
+  // 'steam_logged_in' (или дальше) прежде чем запускать следующий аккаунт.
+  getStatus(id) {
+    const r = db.get('SELECT status FROM accounts WHERE id = ?', [id])
+    return r?.status || null
+  }
 }
 
 export default new AccountManager()

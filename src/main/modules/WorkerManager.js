@@ -1,3 +1,4 @@
+import { BrowserWindow } from 'electron'
 import { SteamWorker } from './SteamWorker'
 import accountManager from './AccountManager'
 import gsiServer from './CS2GSIServer'
@@ -13,6 +14,15 @@ class WorkerManager {
   init(webContents) {
     this.webContents = webContents
     this._bindGsi()
+  }
+
+  // Рассылает событие во ВСЕ открытые BrowserWindow (главное окно,
+  // tracking-окна групп, automation-окна). Без этого tracking-окно с другим
+  // webContents не получает статусы — main отправлял только в this.webContents.
+  send(channel, payload) {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send(channel, payload)
+    }
   }
 
   _bindGsi() {
@@ -67,7 +77,7 @@ class WorkerManager {
 
       console.log(`[WorkerManager GSI] account ${account.id} (${account.login}) status: ${account.status} -> ${newStatus}`)
       accountManager.update(account.id, { status: newStatus })
-      this.webContents?.send('worker:statusChange', {
+      this.send('worker:statusChange', {
         accountId: account.id,
         status:    newStatus,
         gsiInfo:   info,
@@ -82,7 +92,7 @@ class WorkerManager {
 
     worker.on('statusChange', (payload) => {
       accountManager.update(payload.accountId, { status: payload.status })
-      this.webContents?.send('worker:statusChange', payload)
+      this.send('worker:statusChange', payload)
       if (payload.status === 'error' || payload.status === 'no_prime') {
         this.workers.delete(accountId)
       }
@@ -93,21 +103,21 @@ class WorkerManager {
     })
 
     worker.on('error', (payload) => {
-      this.webContents?.send('worker:error', payload)
+      this.send('worker:error', payload)
     })
 
     worker.on('steamGuard', (payload) => {
       console.log('[WorkerManager] steamGuard:', payload.accountId)
-      this.webContents?.send('worker:steamGuard', payload)
+      this.send('worker:steamGuard', payload)
     })
 
     worker.on('drop', (payload) => {
       console.log('[WorkerManager] drop:', payload.accountId, payload.item?.name)
-      this.webContents?.send('worker:drop', payload)
+      this.send('worker:drop', payload)
     })
 
     worker.on('xpUpdate', (payload) => {
-      this.webContents?.send('worker:xpUpdate', payload)
+      this.send('worker:xpUpdate', payload)
     })
 
     this.workers.set(accountId, worker)

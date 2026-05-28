@@ -29,6 +29,7 @@ const STATUS_BADGE = {
   error:                 'badge-red',
   warmup:                'badge-yellow',
   awaiting_guard:        'badge-yellow',
+  queued:                'badge-yellow',
 }
 
 const STATUS_LABEL = {
@@ -59,11 +60,29 @@ const STATUS_LABEL = {
   error:                 'Ошибка',
   warmup:                'Прогрев',
   awaiting_guard:        'Введи код',
+  queued:                'В очереди',
 }
 
-const CS2_STATUSES = new Set(['farming', 'lobby', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_preparing', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_match_loading', 'cs2_in_match', 'cs2_lobby'])
+const CS2_STATUSES = new Set(['farming', 'lobby', 'queued', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_preparing', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_match_loading', 'cs2_in_match', 'cs2_lobby'])
 
-const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'no_prime', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running'])
+const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'queued', 'no_prime', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running'])
+
+// Статусы где идёт автоматический вход в Steam (от первого старта до момента
+// когда Steam полностью залогинился). Пока хотя бы один аккаунт в этих
+// статусах — запуск ДРУГОГО аккаунта блокируется (нельзя параллельно вводить
+// логин/пароль/Guard в две CEF-формы одновременно).
+// 'steam_logged_in' уже НЕ считается "in progress" — вход завершён.
+const LOGIN_IN_PROGRESS_STATUSES = new Set([
+  'cs2_preparing',
+  'queued',
+  'steam_launching',
+  'steam_loading',
+  'steam_login_form',
+  'steam_entering_creds',
+  'steam_creds_submitted',
+  'steam_entering_guard',
+  'awaiting_guard',
+])
 
 function playBeep() {
   try {
@@ -398,6 +417,54 @@ function EditAccountModal({ account, proxies, onSave, onClose }) {
   )
 }
 
+// Модалка-блокер запуска: пока другой аккаунт находится в процессе авто-входа
+// в Steam (Подготовка → ввод логина → ввод Guard → Steam залогинен), запустить
+// другой аккаунт нельзя — параллельный ввод клавиатуры/мыши невозможен и
+// CEF-формы Steam не выдержат одновременный фокус.
+// Закрывается автоматически: как только тот аккаунт завершит вход.
+function LoginInProgressModal({ info, onClose }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="card w-full max-w-md p-6 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-lg font-semibold text-text-primary">
+          Идёт запуск другого аккаунта
+        </h2>
+        <div className="text-text-secondary text-sm space-y-2">
+          <p>
+            Сейчас выполняется авто-вход в Steam{' '}
+            <span className="text-text-primary font-medium">{info.busyLogin}</span>
+            {info.busyLabel && (
+              <> (<span className="text-text-muted">{info.busyLabel}</span>)</>
+            )}.
+          </p>
+          <p>
+            Дождись завершения входа — параллельный ввод данных в две Steam-формы
+            одновременно невозможен.
+          </p>
+          <p className="text-text-muted text-xs">
+            Запуск{' '}
+            <span className="text-text-primary font-medium">{info.login}</span>{' '}
+            станет доступен сразу после того, как
+            <span className="text-text-primary font-medium"> {info.busyLogin}</span>{' '}
+            войдёт в Steam.
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-primary" onClick={onClose}>
+            Понятно
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ImportModal({ onSave, onClose }) {
   const [text, setText] = useState('')
   const [result, setResult] = useState(null)
@@ -448,6 +515,10 @@ export default function Accounts() {
   const [isStartingAll, setIsStartingAll] = useState(false)
   const [isStoppingAll, setIsStoppingAll] = useState(false)
   const [editId, setEditId]               = useState(null)
+  // Модалка-блокер при попытке запустить CS2 пока другой аккаунт ещё в процессе
+  // авто-входа в Steam. null = модалка закрыта.
+  // { accountId, login, busyId, busyLogin, busyLabel } = открыта.
+  const [loginBlock, setLoginBlock]       = useState(null)
 
   const load = useCallback(async () => {
     setIsRefreshing(true)
@@ -498,6 +569,17 @@ export default function Accounts() {
     return () => window.api.farm.offAll()
   }, [load])
 
+  // Автозакрытие модалки-блокера: как только занятый аккаунт прошёл вход,
+  // пользователь сразу может нажать "Запустить CS2" снова без лишних кликов.
+  useEffect(() => {
+    if (!loginBlock) return
+    const busyStatus = workerStatuses[loginBlock.busyId]?.status
+      ?? accounts.find(a => a.id === loginBlock.busyId)?.status
+    if (!busyStatus || !LOGIN_IN_PROGRESS_STATUSES.has(busyStatus)) {
+      setLoginBlock(null)
+    }
+  }, [workerStatuses, accounts, loginBlock])
+
   const getStatus = (account) => {
     const ws = workerStatuses[account.id]
     return ws ? ws.status : account.status
@@ -534,9 +616,37 @@ export default function Accounts() {
     setGuardIndex(i => Math.max(0, i - 1))
   }
 
-  const CS2_ACTIVE = new Set(['cs2_preparing', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
+  const CS2_ACTIVE = new Set(['queued', 'cs2_preparing', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
 
-  const handleStartCS2 = async (id) => { await window.api.launcher.start(id) }
+  // Ищет аккаунт у которого статус "идёт авто-вход". Возвращает null если все
+  // либо ещё не запущены, либо уже залогинены / в CS2.
+  const findLoginInProgressAccount = useCallback(() => {
+    for (const a of accounts) {
+      const status = workerStatuses[a.id]?.status ?? a.status
+      if (LOGIN_IN_PROGRESS_STATUSES.has(status)) return { account: a, status }
+    }
+    return null
+  }, [accounts, workerStatuses])
+
+  // Запуск CS2. Если другой аккаунт сейчас в процессе авто-входа в Steam —
+  // запрещаем и показываем блок-модалку. Это нужно потому что параллельный
+  // ввод логина/пароля/Guard в две CEF-формы Steam невозможен (клавиатура хоста
+  // одна, фокус один). Разрешаем только после steam_logged_in / CS2-статусов.
+  const handleStartCS2 = async (id) => {
+    const busy = findLoginInProgressAccount()
+    if (busy && busy.account.id !== id) {
+      const account = accounts.find(a => a.id === id)
+      setLoginBlock({
+        accountId: id,
+        login:     account?.login || `#${id}`,
+        busyId:    busy.account.id,
+        busyLogin: busy.account.login || `#${busy.account.id}`,
+        busyLabel: STATUS_LABEL[busy.status] || busy.status,
+      })
+      return
+    }
+    await window.api.launcher.start(id)
+  }
 
   const handleStopCS2  = async (id) => { await window.api.launcher.stop(id) }
 
@@ -793,6 +903,12 @@ export default function Accounts() {
 
       {modal === 'add'    && <AddAccountModal proxies={proxies} onSave={() => { load(); setModal(null) }} onClose={() => setModal(null)} />}
       {modal === 'import' && <ImportModal onSave={load} onClose={() => setModal(null)} />}
+      {loginBlock && (
+        <LoginInProgressModal
+          info={loginBlock}
+          onClose={() => setLoginBlock(null)}
+        />
+      )}
       {editId && <EditAccountModal account={accounts.find(a => a.id === editId)} proxies={proxies} onSave={() => { load(); setEditId(null) }} onClose={() => setEditId(null)} />}
       {steamGuardQueue.length > 0 && (() => {
         const safeIdx = Math.min(guardIndex, steamGuardQueue.length - 1)

@@ -168,6 +168,26 @@ class Database {
     for (const [k, v] of Object.entries(launcherDefaults))
       this.db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [k, v])
 
+    // Phase 3B-2: фарм-группы. Группа — 2-4 аккаунта для координированного
+    // запуска CS2 (общее лобби, синхронные действия).
+    // group_accounts — many-to-many: один аккаунт может быть в нескольких
+    // группах, но при запуске одной группы UI блокирует запуск второй с тем
+    // же аккаунтом (он уже занят).
+    this.db.run(`CREATE TABLE IF NOT EXISTS groups (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL,
+      description TEXT,
+      created_at  TEXT DEFAULT (datetime('now'))
+    )`)
+    this.db.run(`CREATE TABLE IF NOT EXISTS group_accounts (
+      group_id   INTEGER NOT NULL,
+      account_id INTEGER NOT NULL,
+      position   INTEGER DEFAULT 0,
+      PRIMARY KEY (group_id, account_id),
+      FOREIGN KEY (group_id)   REFERENCES groups(id)   ON DELETE CASCADE,
+      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+    )`)
+
     this._save()
   }
 }

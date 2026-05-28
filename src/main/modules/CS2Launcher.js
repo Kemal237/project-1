@@ -8,6 +8,7 @@ import accountManager from './AccountManager'
 import gsiServer from './CS2GSIServer'
 import settings from './Settings'
 import sandboxSteamGuard from './SandboxSteamGuard'
+import inputMutex from './InputMutex'
 
 const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
@@ -45,8 +46,14 @@ class CS2Launcher extends EventEmitter {
     return this._active.has(accountId)
   }
 
-  async start(accountId, creds, onStatus) {
+  // Возвращает Promise<{ ok, reason? }>. ok=true если CS2 запустился до состояния
+  // when CS2 started; ok=false при ошибке (deps not found, sandbox failed и т.п.).
+  // useMutex — если true, ввод логина/пароля/Guard сериализуется через глобальный
+  // InputMutex. Нужно когда запускаются параллельно 2+ ботов (группа или быстрое
+  // нажатие из Accounts page) — клавиатура хоста одна, без mutex события смешаются.
+  async start(accountId, creds, onStatus, options = {}) {
     if (this._active.has(accountId)) return
+    const { useMutex = false } = options
 
     try {
       const sbPath = this._findSandboxie()
@@ -110,7 +117,11 @@ class CS2Launcher extends EventEmitter {
       let autoInputResult = null
       try {
         autoInputResult = await sandboxSteamGuard.tryAutoInput(
-          accountId, creds.login, creds.password, creds.sharedSecret, onStatus
+          accountId, creds.login, creds.password, creds.sharedSecret, onStatus,
+          {
+            boxName,                                  // строгая фильтрация окон по нашему боксу
+            mutex:   useMutex ? inputMutex : null,    // сериализация ввода если параллельно
+          }
         )
         console.log(`[CS2Launcher ${accountId}] Steam auto-input result: ${autoInputResult.reason}`)
       } catch (err) {

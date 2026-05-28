@@ -26,6 +26,16 @@ contextBridge.exposeInMainWorld('api', {
     getByAccount: (id)  => ipcRenderer.invoke('drops:getByAccount', id),
     getStats:     ()    => ipcRenderer.invoke('drops:getStats'),
   },
+  groups: {
+    getAll:        ()           => ipcRenderer.invoke('groups:getAll'),
+    get:           (id)         => ipcRenderer.invoke('groups:get', id),
+    create:        (data)       => ipcRenderer.invoke('groups:create', data),
+    update:        (id, data)   => ipcRenderer.invoke('groups:update', id, data),
+    delete:        (id)         => ipcRenderer.invoke('groups:delete', id),
+    openTracking:  (id)         => ipcRenderer.invoke('groups:openTracking', id),
+    start:         (id)         => ipcRenderer.invoke('groups:start', id),
+    stop:          (id)         => ipcRenderer.invoke('groups:stop', id),
+  },
   farm: {
     start:    (id) => ipcRenderer.invoke('farm:start', id),
     stop:     (id) => ipcRenderer.invoke('farm:stop', id),
@@ -94,8 +104,9 @@ contextBridge.exposeInMainWorld('api', {
     offProgress: ()   => ipcRenderer.removeAllListeners('sandboxie:progress'),
   },
   launcher: {
-    start: (accountId) => ipcRenderer.invoke('launcher:start', accountId),
-    stop:  (accountId) => ipcRenderer.invoke('launcher:stop',  accountId),
+    start:      (accountId, opts) => ipcRenderer.invoke('launcher:start', accountId, opts),
+    stop:       (accountId)       => ipcRenderer.invoke('launcher:stop',  accountId),
+    mutexState: ()                => ipcRenderer.invoke('launcher:mutexState'),
   },
   automation: {
     start:      (accountId, pattern) => ipcRenderer.invoke('automation:start', accountId, pattern),
