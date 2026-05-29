@@ -116,7 +116,8 @@ export function setupIPC() {
 
   // Внутренняя функция: запустить CS2 launcher для одного аккаунта.
   // Используется как из launcher:start (одиночный запуск), так и из
-  // groups:start (запуск всей группы — параллельно, ввод сериализуется mutex'ом).
+  // groups:start (запуск группы ПОСЛЕДОВАТЕЛЬНО: следующий аккаунт стартует
+  // только после того как предыдущий полностью залогинился — см. groups:start).
   async function startLauncherForAccount(accountId, { useMutex } = {}) {
     const creds = accountManager.getCredentials(accountId)
     if (!creds) return { ok: false, error: 'Аккаунт не найден' }

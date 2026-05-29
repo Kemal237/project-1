@@ -79,9 +79,15 @@ class Database {
 
   run(sql, params = []) {
     this.db.run(sql, params)
-    this._save()
+    // ВАЖНО: last_insert_rowid() читаем ДО _save(). _save() вызывает
+    // this.db.export(), который в sql.js сбрасывает состояние соединения —
+    // после него last_insert_rowid() возвращает 0. Если читать после _save,
+    // create() получал groupId=0 и привязывал аккаунты к несуществующей
+    // группе (а update() работал, т.к. использует переданный id, не rowid).
     const r = this.db.exec('SELECT last_insert_rowid()')
-    return { lastInsertRowid: r[0]?.values[0][0] }
+    const lastInsertRowid = r[0]?.values[0][0]
+    this._save()
+    return { lastInsertRowid }
   }
 
   _migrate() {

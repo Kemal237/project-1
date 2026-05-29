@@ -248,7 +248,8 @@ class SandboxSteamGuard {
     }
   }
 
-  async tryAutoInput(accountId, login, password, sharedSecret, onStep) {
+  async tryAutoInput(accountId, login, password, sharedSecret, onStep, options = {}) {
+    const { boxName = null } = options
     this._ensureScripts()
     this._seenHwnds.clear()
     this._loginHwnd = null
@@ -267,10 +268,22 @@ class SandboxSteamGuard {
     while (Date.now() < deadline) {
       const allWindows = this._enumSteamWindows()
       // Sandboxie добавляет маркер [#] в title И префикс Sandbox:<box>: к classname.
-      // Любой из двух признаков надёжно идентифицирует sandboxed окно.
-      const sandboxed = allWindows.filter(w =>
-        (w.title || '').includes('[#]') || (w.class || '').startsWith('Sandbox:')
-      )
+      // boxName задан → СТРОГО окна нашего бокса (класс "Sandbox:<box>:..."),
+      // иначе авто-ввод при 2+ запущенных боксах может попасть в окно чужого
+      // аккаунта. Без boxName (одиночный запуск) — любой из двух признаков.
+      const sandboxed = allWindows.filter(w => {
+        const cls = w.class || ''
+        const isSandboxed = (w.title || '').includes('[#]') || cls.startsWith('Sandbox:')
+        if (!isSandboxed) return false
+        // boxName задан → исключаем окна ЧУЖИХ боксов (Sandbox:<other>:...),
+        // чтобы при 2+ запущенных аккаунтах авто-ввод не попал в чужое окно.
+        // Окна нашего бокса и неоднозначные (только [#], без Sandbox:-класса)
+        // оставляем — это не ломает одиночный запуск.
+        if (boxName && cls.startsWith('Sandbox:') && !cls.startsWith(`Sandbox:${boxName}:`)) {
+          return false
+        }
+        return true
+      })
 
       // Логируем каждое НОВОЕ окно (по hwnd) — увидим как Steam развивается:
       // splash → bootstrap → login dialog → main UI
