@@ -616,7 +616,7 @@ export default function Accounts() {
     setGuardIndex(i => Math.max(0, i - 1))
   }
 
-  const CS2_ACTIVE = new Set(['queued', 'cs2_preparing', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
+  const CS2_ACTIVE = new Set(['queued', 'cs2_preparing', 'awaiting_guard', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
 
   // Ищет аккаунт у которого статус "идёт авто-вход". Возвращает null если все
   // либо ещё не запущены, либо уже залогинены / в CS2.
@@ -693,33 +693,11 @@ export default function Accounts() {
         <div className="flex gap-2">
           {selected.size > 0 && (
             <>
-              <button className="btn-ghost transition-all active:scale-95" onClick={startSelected}>
-                <Play size={14} className="text-green-400" /> Старт ({selected.size})
-              </button>
-              <button className="btn-ghost transition-all active:scale-95" onClick={stopSelected}>
-                <Square size={14} className="text-red-400" /> Стоп ({selected.size})
-              </button>
               <button className="btn-danger transition-all active:scale-95" onClick={deleteSelected}>
                 <Trash2 size={14} /> Удалить ({selected.size})
               </button>
             </>
           )}
-          <button
-            className="btn-ghost transition-all active:scale-95 disabled:opacity-50"
-            onClick={handleStopAll}
-            disabled={isStoppingAll || activeCount === 0}
-          >
-            <Square size={14} className={isStoppingAll ? 'animate-pulse' : ''} />
-            {isStoppingAll ? 'Стоп...' : 'Стоп все'}
-          </button>
-          <button
-            className="btn-primary transition-all active:scale-95 disabled:opacity-50"
-            onClick={handleStartAll}
-            disabled={isStartingAll}
-          >
-            <Play size={14} className={isStartingAll ? 'animate-pulse' : ''} />
-            {isStartingAll ? 'Запуск...' : 'Старт все'}
-          </button>
           <button className="btn-ghost transition-all active:scale-95" onClick={() => setModal('import')}>
             <Upload size={14} /> Импорт
           </button>
@@ -852,16 +830,6 @@ export default function Accounts() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {active
-                        ? <button className="btn-ghost p-1.5" title="Отключить" onClick={() => handleStop(a.id)}>
-                            <Square size={13} className="text-red-400" />
-                          </button>
-                        : <button className="btn-ghost p-1.5" title="Подключить"
-                            onClick={() => handleStart(a.id)}
-                            disabled={CS2_ACTIVE.has(status)}>
-                            <Play size={13} className={CS2_ACTIVE.has(status) ? 'text-text-muted opacity-40' : 'text-green-400'} />
-                          </button>
-                      }
                       {CS2_ACTIVE.has(status) ? (
                         <button className="btn-ghost p-1.5" title="Остановить CS2"
                           onClick={() => handleStopCS2(a.id)}>

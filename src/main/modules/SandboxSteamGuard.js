@@ -157,6 +157,74 @@ $null = [GuardAct]::AttachThreadInput($ourTid, $targetTid, $false)
 Write-Output $(if ($ok) { 'OK' } else { 'FAIL' })
 `.trim()
 
+// PS-скрипт: в ОДНОМ процессе активирует окно, КЛИКАЕТ по полю ввода (ставит
+// caret в нужный input), затем шлёт Ctrl+A + Ctrl+V (+ опц. Enter) через SendKeys.
+//
+// Почему всё в одном процессе и именно в таком порядке:
+//   1) SetForegroundWindow — окно Steam на переднем плане (нужно для SendKeys).
+//   2) Клик мышью по (X,Y) ВНУТРИ уже активного окна — ставит caret в поле CEF.
+//      Это ПОСЛЕДНЕЕ действие, ставящее фокус, прямо перед вставкой.
+//   3) Ctrl+A + Ctrl+V — вставка в сфокусированное поле.
+//
+// РАНЬШЕ было два бага: (а) активация и SendKeys в РАЗНЫХ процессах — foreground
+// терялся между ними; (б) SetFocus($h) на top-level окно уводил фокус С поля
+// ВВОДА обратно на рамку → в момент вставки "поле не выбрано", текст не вставлялся.
+// Оба исправлены: один процесс + клик по полю вместо SetFocus.
+const PASTE_PS = `
+param([long]$Hwnd, [int]$X = 0, [int]$Y = 0, [int]$Enter = 0)
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Paster {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int n);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+}
+'@
+# Явный Ctrl+<key> через keybd_event с контролируемыми задержками. Надёжнее
+# SendKeys: каждый шаг (Ctrl down -> key down -> key up -> Ctrl up) с паузой,
+# Ctrl гарантированно дожимается и отпускается — не залипает между ^a и ^v.
+function Send-Ctrl([byte]$vk) {
+  [Paster]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 40  # Ctrl down
+  [Paster]::keybd_event($vk,  0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 60  # key down
+  [Paster]::keybd_event($vk,  0, 2, [UIntPtr]::Zero); Start-Sleep -Milliseconds 40  # key up
+  [Paster]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero); Start-Sleep -Milliseconds 40  # Ctrl up
+}
+$h = [IntPtr]$Hwnd
+if (-not [Paster]::IsWindow($h)) { Write-Output 'INVALID'; exit }
+$targetPid = [uint32]0
+$targetTid = [Paster]::GetWindowThreadProcessId($h, [ref]$targetPid)
+$ourTid = [Paster]::GetCurrentThreadId()
+$null = [Paster]::AttachThreadInput($ourTid, $targetTid, $true)
+$null = [Paster]::ShowWindow($h, 9)
+$null = [Paster]::SetForegroundWindow($h)
+Start-Sleep -Milliseconds 250
+if ($X -gt 0 -and $Y -gt 0) {
+  $null = [Paster]::SetCursorPos($X, $Y)
+  Start-Sleep -Milliseconds 60
+  [Paster]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)  # LEFTDOWN
+  Start-Sleep -Milliseconds 40
+  [Paster]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)  # LEFTUP
+  Start-Sleep -Milliseconds 350
+}
+Send-Ctrl 0x41        # Ctrl+A — выделить содержимое поля
+Start-Sleep -Milliseconds 120
+Send-Ctrl 0x56        # Ctrl+V — вставить
+Start-Sleep -Milliseconds 200
+if ($Enter -eq 1) {
+  [Paster]::keybd_event(0x0D, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 40  # Enter down
+  [Paster]::keybd_event(0x0D, 0, 2, [UIntPtr]::Zero); Start-Sleep -Milliseconds 80  # Enter up
+}
+$null = [Paster]::AttachThreadInput($ourTid, $targetTid, $false)
+Write-Output 'OK'
+`.trim()
+
 class SandboxSteamGuard {
   constructor() {
     this._scriptsWritten = false
@@ -173,6 +241,7 @@ class SandboxSteamGuard {
       writeFileSync(join(PS_DIR, 'enum-steam-windows.ps1'), ENUM_STEAM_WINDOWS_PS, 'utf8')
       writeFileSync(join(PS_DIR, 'is-window.ps1'),          IS_WINDOW_PS,          'utf8')
       writeFileSync(join(PS_DIR, 'activate-guard.ps1'),     ACTIVATE_PS,           'utf8')
+      writeFileSync(join(PS_DIR, 'paste-to-window.ps1'),    PASTE_PS,              'utf8')
       this._scriptsWritten = true
     } catch (e) {
       console.log('[SandboxSteamGuard] _ensureScripts error:', e.message)
@@ -439,23 +508,15 @@ class SandboxSteamGuard {
       const passX  = loginX
       const passY  = rect.top  + Math.floor(rect.height * 0.52)
 
-      // Clipboard paste вместо keyboard.type: атомарная вставка через Ctrl+V.
-      // keyboard.type теряет первые символы в Sandboxie+CEF (фокус CEF после
-      // mouse-click ставится асинхронно, первые keystroke улетают в окно
-      // до того как caret приземлится в input). Ctrl+V — один keystroke,
-      // буфер уже атомарно содержит весь текст — потерь нет.
-      await this._focusField(loginX, loginY)
-      await this._pasteText(login)
+      // _pasteText активирует окно, кликает по полю (caret в input) и вставляет
+      // буфер (Ctrl+A+Ctrl+V) — всё в одном PS-процессе. Enter только после
+      // пароля — отправка формы входа.
+      await this._pasteText(hwnd, loginX, loginY, login, false)
       await this._sleep(400)
 
-      await this._focusField(passX, passY)
-      await this._pasteText(password)
+      await this._pasteText(hwnd, passX, passY, password, true)  // пароль + Enter (submit)
       await this._sleep(400)
 
-      await keyboard.pressKey(Key.Enter)
-      await keyboard.releaseKey(Key.Enter)
-      // TEMP: clipboard.clear() убран для диагностики — чтобы пользователь
-      // мог проверить вручную Ctrl+V что в буфере. Вернуть после фикса.
       return true
     } catch (e) {
       console.log(`[SandboxSteamGuard] _submitLogin error: ${e.message}`)
@@ -480,18 +541,20 @@ class SandboxSteamGuard {
     }
   }
 
-  // Атомарная вставка текста через системный буфер обмена.
-  // Решает проблему потери первых символов в Sandboxie+CEF: keyboard.type()
-  // шлёт символы по одному через SendInput, и пока CEF не финализировал
-  // focus после клика — первые ~6 keystroke теряются. Ctrl+V — один
-  // keystroke, который вставляет ВЕСЬ текст за один dispatch, поэтому
-  // даже если focus задержался — текст не теряется (последний keystroke
-  // ловится надёжно, в отличие от первых).
+  // Вставка текста через системный буфер обмена С ПРИВЯЗКОЙ К ОКНУ.
+  // 1) Electron clipboard.writeText — синхронно кладёт текст в буфер.
+  // 2) paste-to-window.ps1 — в ОДНОМ процессе активирует окно Steam и шлёт
+  //    Ctrl+A + Ctrl+V (+ Enter если withEnter). Активация и вставка в одном
+  //    процессе — foreground не успевает перехватиться, Ctrl+V попадает в Steam.
   //
-  // Electron clipboard API синхронный и нативный — гарантия что к моменту
-  // Ctrl+V буфер уже содержит нужный текст (в отличие от PowerShell
-  // Set-Clipboard который спавнится ~500мс async и Ctrl+V улетал раньше).
-  async _pasteText(text) {
+  // Почему clipboard, а не keyboard.type: keyboard.type шлёт символы по одному
+  // через SendInput, и пока CEF не финализировал focus — первые keystroke
+  // теряются. Ctrl+V вставляет весь текст за один dispatch.
+  //
+  // Почему SendKeys, а не nut.js Ctrl+V: libnut выставляет KF_REPEAT флаг,
+  // который Chromium/CEF фильтрует (bug 109151). SendKeys (keybd_event)
+  // проходит в CEF — подтверждено: физический Ctrl+V вставляет в Steam.
+  async _pasteText(hwnd, x, y, text, withEnter = false) {
     try {
       clipboard.writeText(text)
       const verified = clipboard.readText()
@@ -500,37 +563,32 @@ class SandboxSteamGuard {
       } else {
         console.log(`[SandboxSteamGuard] clipboard ok (${text.length} chars)`)
       }
-      // Длинная пауза после click — CEF финализирует focus ~800мс
-      await this._sleep(800)
-      // Ctrl+A — выделить содержимое (через PowerShell SendKeys, не nut-js)
-      this._sendKeys('^a')
-      await this._sleep(200)
-      // Ctrl+V — вставить (через PowerShell SendKeys)
-      this._sendKeys('^v')
+      // Дать Sandboxie синхронизировать буфер обмена в песочницу прежде чем
+      // sandboxed CEF прочитает его по Ctrl+V — иначе вставка флакает (пусто).
+      await this._sleep(250)
+      const res = this._pasteToWindow(hwnd, x, y, withEnter)
+      console.log(`[SandboxSteamGuard] paste-to-window(hwnd=${hwnd}, xy=${x},${y}, enter=${withEnter}) -> ${res}`)
       await this._sleep(300)
     } catch (e) {
       console.log(`[SandboxSteamGuard] _pasteText error: ${e.message}`)
     }
   }
 
-  // Шлёт keystroke через PowerShell System.Windows.Forms.SendKeys.
-  // Обход libnut SendInput: Chromium/CEF фильтрует keystroke с KF_REPEAT
-  // флагом который libnut выставляет (Chromium bug 109151). SendKeys
-  // использует другой API (keybd_event) — события проходят в CEF.
-  //
-  // Манульный тест пользователя подтвердил: Ctrl+V физической клавиатуры
-  // вставляет текст из буфера в Steam, но nut-js Ctrl+V не работает.
-  //
-  // Синтаксис: '^' = Ctrl, '%' = Alt, '+' = Shift, '~' = Enter
-  // Пример: '^v' = Ctrl+V, '^a' = Ctrl+A
-  _sendKeys(keys) {
+  // Активирует окно hwnd, кликает по (x,y) для постановки caret в поле, затем
+  // вставляет содержимое буфера (Ctrl+A, Ctrl+V) — всё в одном процессе
+  // PowerShell. windowsHide — чтобы консоль powershell не мелькала и не крала
+  // foreground. Возвращает 'OK' / 'INVALID' / 'ERROR'.
+  _pasteToWindow(hwnd, x, y, withEnter = false) {
+    const script = join(PS_DIR, 'paste-to-window.ps1')
+    if (!existsSync(script)) this._ensureScripts()
     try {
-      execSync(
-        `powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${keys}')"`,
-        { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }
-      )
+      return execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}" -Hwnd ${hwnd} -X ${Math.round(x)} -Y ${Math.round(y)} -Enter ${withEnter ? 1 : 0}`,
+        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }
+      ).trim()
     } catch (e) {
-      console.log(`[SandboxSteamGuard] _sendKeys('${keys}') error: ${e.message}`)
+      console.log(`[SandboxSteamGuard] _pasteToWindow error: ${e.message}`)
+      return 'ERROR'
     }
   }
 
@@ -556,23 +614,17 @@ class SandboxSteamGuard {
       try {
         // Steam Guard CEF UI: 5-значное поле для кода в верхней-средней части
         // окна (под заголовком "Подтвердите вход"). Координата Y ~40%.
-        // Поле пустое при первом показе — стирание не нужно, только клик
-        // для фокуса + пауза + ввод цифр.
+        // _pasteText сам кликнет по (cx,cy) внутри окна и вставит код.
+        let cx = 0, cy = 0
         if (rect) {
-          const cx = rect.left + Math.floor(rect.width  * 0.50)
-          const cy = rect.top  + Math.floor(rect.height * 0.40)
-          console.log(`[SandboxSteamGuard ${accountId}] clicking Guard field at (${cx}, ${cy}) — window ${rect.width}x${rect.height}@(${rect.left},${rect.top})`)
-          await this._focusField(cx, cy)
+          cx = rect.left + Math.floor(rect.width  * 0.50)
+          cy = rect.top  + Math.floor(rect.height * 0.40)
+          console.log(`[SandboxSteamGuard ${accountId}] Guard field at (${cx}, ${cy}) — window ${rect.width}x${rect.height}@(${rect.left},${rect.top})`)
         }
 
-        // Ввод Guard кода через clipboard paste — та же причина что и для
-        // login/password: keyboard.type теряет символы в CEF, Ctrl+V атомарен.
-        await this._pasteText(code)
+        // Ввод Guard кода через clipboard paste с привязкой к окну (+Enter).
+        await this._pasteText(hwnd, cx, cy, code, true)
         await this._sleep(150)
-        await keyboard.pressKey(Key.Enter)
-        await this._sleep(40)
-        await keyboard.releaseKey(Key.Enter)
-        // TEMP: clipboard.clear() убран для диагностики
       } catch (e) {
         console.log(`[SandboxSteamGuard ${accountId}] keyboard input error: ${e.message}`)
         if (attempt === MAX_RETRIES) return { ok: false, reason: 'activation_failed' }
