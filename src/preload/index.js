@@ -106,6 +106,7 @@ contextBridge.exposeInMainWorld('api', {
   launcher: {
     start:      (accountId, opts) => ipcRenderer.invoke('launcher:start', accountId, opts),
     stop:       (accountId)       => ipcRenderer.invoke('launcher:stop',  accountId),
+    restart:    (accountId)       => ipcRenderer.invoke('launcher:restart', accountId),
     mutexState: ()                => ipcRenderer.invoke('launcher:mutexState'),
   },
   automation: {

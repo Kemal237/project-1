@@ -163,6 +163,35 @@ export function setupIPC() {
     return { ok: true }
   })
 
+  // Перезапуск аккаунта (кнопка в окне отслеживания): убить ВСЕ процессы
+  // бокса аккаунта → пауза для очистки → запустить заново. Ограничение
+  // последовательности: если ДРУГОЙ аккаунт сейчас проходит вход в Steam —
+  // запрещаем (нельзя вводить логин/пароль/Guard в две формы одновременно).
+  ipcMain.handle('launcher:restart', async (_, accountId) => {
+    // Валидация на входе (defense in depth): accountId уходит в имя бокса,
+    // которое попадает в shell-команду killBox. Только целое положительное.
+    if (!Number.isInteger(accountId) || accountId <= 0) {
+      return { ok: false, error: 'Некорректный аккаунт' }
+    }
+    const blocker = findAccountLoggingIn(accountId)
+    if (blocker) {
+      return {
+        ok: false,
+        reason: 'login_in_progress',
+        error: `Сейчас входит ${blocker.login}. Дождись завершения входа.`,
+        busyId: blocker.id,
+        busyLogin: blocker.login,
+      }
+    }
+    // Полная остановка + гарантированное убийство бокса (даже если аккаунт
+    // не в _active — после краша/ручного закрытия/зависшего входа).
+    stopLauncherForAccount(accountId)
+    cs2Launcher.killBox(accountId)
+    // Пауза, чтобы Sandboxie успел освободить бокс перед повторным запуском.
+    await new Promise(r => setTimeout(r, 1500))
+    return startLauncherForAccount(accountId, { useMutex: false })
+  })
+
   // Статусы при которых "вход в Steam завершён" — sequential запуск группы
   // ждёт что аккаунт перейдёт в один из них, прежде чем запустить следующий.
   // error/idle — терминальные, бот зафейлился или был остановлен.
@@ -172,6 +201,26 @@ export function setupIPC() {
     'cs2_match_loading', 'cs2_match', 'cs2_in_match',
     'error', 'idle',
   ])
+
+  // Статусы "идёт вход в Steam" — пока хотя бы один аккаунт в этих статусах,
+  // перезапуск ДРУГОГО блокируется (параллельный ввод логина/пароля/Guard в
+  // две CEF-формы невозможен). Зеркало LOGIN_IN_PROGRESS_STATUSES в Accounts.jsx.
+  const LOGIN_IN_PROGRESS = new Set([
+    'cs2_preparing', 'queued',
+    'steam_launching', 'steam_loading', 'steam_login_form',
+    'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard',
+    'awaiting_guard',
+  ])
+
+  // Возвращает первый аккаунт (кроме excludeId), который сейчас проходит вход
+  // в Steam, или null. Ограничение последовательности для launcher:restart.
+  function findAccountLoggingIn(excludeId) {
+    for (const a of accountManager.getAll()) {
+      if (a.id === excludeId) continue
+      if (a.status && LOGIN_IN_PROGRESS.has(a.status)) return a
+    }
+    return null
+  }
 
   // Ждёт пока статус accountId перейдёт в один из LOGIN_DONE_STATUSES
   // (или истечёт timeout). Используется в groups:start чтобы запускать

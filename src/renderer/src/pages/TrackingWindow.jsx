@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Shield, ShieldCheck, ShieldOff, Loader, Crosshair, Skull, Trophy, Map as MapIcon, Minus, X, Eye, Activity } from 'lucide-react'
+import { Shield, ShieldCheck, ShieldOff, Loader, Crosshair, Skull, Trophy, Map as MapIcon, Minus, X, Eye, Activity, RotateCcw } from 'lucide-react'
 
 // Отдельное окно отслеживания группы. Открывается через
 // window.api.groups.openTracking(groupId) — main process создаёт BrowserWindow
@@ -49,6 +49,16 @@ const STATUS_LABEL = {
 const MATCH_STATUSES = new Set(['cs2_match', 'cs2_in_match'])
 const MAX_LOG_ENTRIES = 200
 
+// Статусы "идёт вход в Steam". Пока хотя бы один аккаунт в этих статусах,
+// перезапуск ДРУГОГО блокируется (нельзя вводить данные в две формы сразу).
+// Зеркало LOGIN_IN_PROGRESS в main/ipc.js и Accounts.jsx.
+const LOGIN_IN_PROGRESS_STATUSES = new Set([
+  'cs2_preparing', 'queued',
+  'steam_launching', 'steam_loading', 'steam_login_form',
+  'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard',
+  'awaiting_guard',
+])
+
 function PrimeIcon({ account }) {
   if (!account.lastLoginAt) return <Shield size={13} className="text-text-muted" />
   if (account.isPrime) return <ShieldCheck size={13} className="text-blue-400" />
@@ -75,7 +85,14 @@ function ProxyDot({ proxy }) {
 }
 
 // КОЛОНКА 1: строка одного аккаунта со статусом и базовой информацией.
-function AccountInfoRow({ account, status }) {
+// Кнопка перезапуска: убивает процессы аккаунта и запускает заново. Блокируется
+// (blocked), пока другой аккаунт ещё проходит вход — ограничение очереди.
+function AccountInfoRow({ account, status, onRestart, restarting, blocked, blockLogin }) {
+  const title = restarting
+    ? 'Перезапуск...'
+    : blocked
+      ? `Нельзя: сейчас входит ${blockLogin}`
+      : 'Перезапустить аккаунт (убить процессы и запустить заново)'
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-bg-card border border-border rounded-md">
       <PrimeIcon account={account} />
@@ -89,6 +106,16 @@ function AccountInfoRow({ account, status }) {
       <span className={`${STATUS_BADGE[status] || 'badge-gray'} shrink-0 text-[10px]`}>
         {STATUS_LABEL[status] || status}
       </span>
+      <button
+        onClick={() => { if (!blocked && !restarting) onRestart(account.id) }}
+        disabled={blocked || restarting}
+        title={title}
+        className="shrink-0 p-1 rounded hover:bg-bg-hover text-text-secondary
+                   hover:text-blue-400 transition-colors disabled:opacity-30
+                   disabled:cursor-not-allowed disabled:hover:text-text-secondary"
+      >
+        <RotateCcw size={13} className={restarting ? 'animate-spin' : ''} />
+      </button>
     </div>
   )
 }
@@ -182,6 +209,8 @@ export default function TrackingWindow({ groupId }) {
   const [workerStatuses, setStatuses]   = useState({})
   const [matchStats, setMatchStats]     = useState({}) // accountId → { kills, deaths, assists, score }
   const [logEntries, setLogEntries]     = useState([])
+  const [restartingId, setRestartingId] = useState(null) // id аккаунта в процессе перезапуска
+  const [notice, setNotice]             = useState('')   // короткое сообщение (напр. блокировка очереди)
 
   // Чтобы handler onStatus имел свежий список аккаунтов группы и не
   // ловил лишних — храним в ref id-шники аккаунтов группы.
@@ -246,6 +275,27 @@ export default function TrackingWindow({ groupId }) {
   const getStatus = (account) =>
     workerStatuses[account.id]?.status ?? account.status ?? 'idle'
 
+  // Аккаунт, который сейчас проходит вход в Steam (или null). Пока он есть,
+  // перезапуск ОСТАЛЬНЫХ аккаунтов заблокирован — ограничение очереди.
+  const loggingInAccount = group?.accounts.find(a =>
+    LOGIN_IN_PROGRESS_STATUSES.has(getStatus(a))
+  ) || null
+
+  // Перезапуск аккаунта: бэкенд убивает процессы бокса и запускает заново.
+  // Очередь проверяется и на бэкенде (на случай гонки), здесь — для UX.
+  const handleRestart = async (accountId) => {
+    setRestartingId(accountId)
+    setNotice('')
+    try {
+      const r = await window.api.launcher.restart(accountId)
+      if (!r?.ok) setNotice(r?.error || 'Не удалось перезапустить аккаунт')
+    } catch (e) {
+      setNotice(e?.message || 'Ошибка перезапуска')
+    } finally {
+      setRestartingId(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col h-screen bg-bg-primary text-text-primary">
@@ -304,9 +354,22 @@ export default function TrackingWindow({ groupId }) {
             title="Аккаунты"
             subtitle="Статусы и информация"
           />
+          {notice && (
+            <div className="mx-2 mt-2 px-3 py-1.5 text-[11px] text-yellow-200/90 bg-yellow-500/10 border border-yellow-500/30 rounded-md">
+              {notice}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-2 space-y-2">
             {group.accounts.map(a => (
-              <AccountInfoRow key={a.id} account={a} status={getStatus(a)} />
+              <AccountInfoRow
+                key={a.id}
+                account={a}
+                status={getStatus(a)}
+                onRestart={handleRestart}
+                restarting={restartingId === a.id}
+                blocked={!!loggingInAccount && loggingInAccount.id !== a.id}
+                blockLogin={loggingInAccount?.login}
+              />
             ))}
             {group.accounts.length === 0 && (
               <div className="text-center text-text-muted text-xs py-4">

@@ -136,14 +136,14 @@ class CS2Launcher extends EventEmitter {
       if (!autoInputResult || !autoInputResult.ok) {
         console.log(`[CS2Launcher ${accountId}] auto-input failed, waiting for manual login (main Steam UI)...`)
         onStatus('awaiting_guard', 'Ожидание ручного входа в Steam...')
-        const ok = await sandboxSteamGuard.waitForMainSteamUI(300_000)
+        const ok = await sandboxSteamGuard.waitForMainSteamUI(boxName, 300_000)
         if (!ok) {
           throw new Error('Steam не залогинился за 5 минут (нет главного окна). Проверь авторизацию вручную.')
         }
       } else {
         // Auto-input успешный — Steam точно залогинен. Короткая пауза для
         // того чтобы main UI успел отрисоваться перед запуском CS2.
-        await sandboxSteamGuard.waitForMainSteamUI(30_000)
+        await sandboxSteamGuard.waitForMainSteamUI(boxName, 30_000)
       }
 
       onStatus('steam_running', 'Steam авторизован')
@@ -279,6 +279,35 @@ class CS2Launcher extends EventEmitter {
 
   stopAll() {
     for (const id of [...this._active.keys()]) this.stop(id)
+  }
+
+  // Принудительно убивает ВСЕ процессы бокса аккаунта по детерминированному
+  // имени (CS2Bot_<id>) — работает даже если аккаунт не в _active (после
+  // краша, ручного закрытия окна или зависшего входа). Используется кнопкой
+  // "Перезапустить" в окне отслеживания, чтобы гарантированно очистить бокс
+  // перед повторным запуском.
+  killBox(accountId) {
+    // accountId идёт в shell-команду — строго целое положительное, иначе
+    // отказ (защита от command injection; имя бокса детерминировано из id).
+    if (!Number.isInteger(accountId) || accountId <= 0) return
+    const sbPath = this._findSandboxie()
+    if (!sbPath) return
+    const boxName = `CS2Bot_${accountId}`
+    try {
+      execSync(
+        `"${join(sbPath, 'Stop.exe')}" /box:${boxName}`,
+        { timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] }
+      )
+    } catch {
+      try {
+        execSync(
+          `"${join(sbPath, 'Start.exe')}" /box:${boxName} /terminate`,
+          { timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] }
+        )
+      } catch (e) {
+        console.log(`[CS2Launcher] killBox ${boxName} failed:`, e.message)
+      }
+    }
   }
 
   // Парсит loginusers.vdf из sandbox-папки Steam после успешного логина

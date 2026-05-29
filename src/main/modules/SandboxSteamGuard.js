@@ -684,22 +684,42 @@ class SandboxSteamGuard {
     return { left: w.left, top: w.top, width: w.width, height: w.height }
   }
 
-  // Ждёт пока в системе появится sandboxed окно Steam с размером главного UI
-  // (≥ MAIN_UI_AREA_THRESHOLD). Это надёжный признак что пользователь
-  // (вручную или автоматически) залогинился — после login Steam показывает
-  // большое окно с библиотекой/магазином. До логина окно входа маленькое.
-  // Возвращает true если main UI появилось, false если timeout.
-  async waitForMainSteamUI(timeoutMs = 300_000, pollMs = 1500) {
+  // Ждёт пока пользователь/авто-ввод залогинится в Steam СВОЕГО бокса.
+  //
+  // Признак "залогинился" = в боксе есть окно главного UI (≥ MAIN_UI_AREA_THRESHOLD)
+  // И НЕТ открытой формы входа/Guard (окна "формального" размера 500x350..main UI).
+  //
+  // boxName ОБЯЗАТЕЛЕН при мультизапуске: без привязки к боксу окно уже
+  // залогиненного аккаунта A (большой main UI) засчитывалось как "вход завершён"
+  // для аккаунта B, и статус B прыгал на "Запуск CS2" пока юзер ещё вводил код B.
+  // Проверка "форма закрыта" дополнительно страхует от ложного срабатывания,
+  // пока окно входа/Guard ещё на экране.
+  // Возвращает true если вход завершён, false если timeout.
+  async waitForMainSteamUI(boxName = null, timeoutMs = 300_000, pollMs = 1500) {
     this._ensureScripts()
+    const LOGIN_FORM_MIN_AREA = 500 * 350
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       const all = this._enumSteamWindows()
-      const sandboxed = all.filter(w =>
-        w.visible &&
-        ((w.title || '').includes('[#]') || (w.class || '').startsWith('Sandbox:'))
-      )
-      const mainUi = sandboxed.find(w => (w.width * w.height) >= MAIN_UI_AREA_THRESHOLD)
-      if (mainUi) {
+      const boxWins = all.filter(w => {
+        const cls = w.class || ''
+        const isSandboxed = w.visible &&
+          ((w.title || '').includes('[#]') || cls.startsWith('Sandbox:'))
+        if (!isSandboxed) return false
+        // boxName задан → исключаем окна ЧУЖИХ боксов (как в tryAutoInput).
+        if (boxName && cls.startsWith('Sandbox:') && !cls.startsWith(`Sandbox:${boxName}:`)) {
+          return false
+        }
+        return true
+      })
+      const hasMainUi = boxWins.some(w => (w.width * w.height) >= MAIN_UI_AREA_THRESHOLD)
+      // Форма входа/Guard ещё открыта, если есть steam-окно "формального"
+      // размера (≥500x350, но меньше main UI). Пока она есть — вход не завершён.
+      const hasLoginForm = boxWins.some(w => {
+        const area = w.width * w.height
+        return area >= LOGIN_FORM_MIN_AREA && area < MAIN_UI_AREA_THRESHOLD
+      })
+      if (hasMainUi && !hasLoginForm) {
         return true
       }
       await this._sleep(pollMs)
