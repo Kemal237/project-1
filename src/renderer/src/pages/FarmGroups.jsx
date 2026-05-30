@@ -375,6 +375,39 @@ function ConfirmDeleteModal({ group, onCancel, onConfirm }) {
   )
 }
 
+// Модалка ввода кода Steam Guard для friend-сессии (аккаунты без maFile).
+// domain != null — код из email; иначе — код из приложения Steam Mobile.
+function FriendGuardModal({ login, domain, onSubmit, onClose }) {
+  const [code, setCode] = useState('')
+  const submit = () => { const c = code.trim(); if (c) onSubmit(c) }
+  return (
+    <ModalPortal onClose={onClose}>
+      <div className="card w-full max-w-sm p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-text-primary">Код Steam Guard</h2>
+        <p className="text-sm text-text-secondary">
+          Аккаунт <span className="text-text-primary font-medium">«{login}»</span>:{' '}
+          {domain
+            ? <>введи код из письма на <span className="text-text-primary">{domain}</span>.</>
+            : <>введи текущий код из приложения <span className="text-text-primary">Steam Mobile</span>.</>}
+        </p>
+        <input
+          autoFocus
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
+          placeholder="XXXXX"
+          maxLength={10}
+          className="input w-full text-center tracking-[0.4em] font-mono text-lg uppercase"
+        />
+        <div className="flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>Отмена</button>
+          <button className="btn-primary" onClick={submit} disabled={!code.trim()}>Подтвердить</button>
+        </div>
+      </div>
+    </ModalPortal>
+  )
+}
+
 // Статусы которые считаются "идёт авто-вход" — пока хотя бы один аккаунт из
 // другой группы в этих статусах, нельзя запускать вторую группу с тем же
 // аккаунтом (параллельный ввод невозможен) и нельзя из Accounts тоже.
@@ -400,6 +433,7 @@ export default function FarmGroups() {
   const [deleting, setDeleting]   = useState(null)   // group или null
   const [notice, setNotice]       = useState('')     // toast
   const [friendingId, setFriendingId] = useState(null)
+  const [guardReq, setGuardReq]   = useState(null)   // { accountId, login, domain } или null
   // Live-статусы аккаунтов (с воркеров) — для isGroupRunning и блок-модалки.
   const [workerStatuses, setWorkerStatuses] = useState({})
   // Конфликт-модалка: { group, busyAccounts: [{login, status}] }
@@ -488,13 +522,18 @@ export default function FarmGroups() {
   // Mobile) — прогресс показывает, какой аккаунт ждёт подтверждения.
   const handleFriend = async (group) => {
     setFriendingId(group.id)
-    setNotice(`Дружим аккаунты группы «${group.name}» — следи за телефоном, подтверди вход для каждого аккаунта...`)
+    setNotice(`Дружим аккаунты группы «${group.name}»...`)
     const byId = new Map(group.accounts.map(a => [a.id, a.login]))
     window.api.groups.onFriendsProgress(({ accountId, status, message }) => {
       const login = byId.get(accountId) || `#${accountId}`
       if (status === 'awaiting_guard') setNotice(`«${login}»: ${message}`)
       else if (status === 'connecting') setNotice(`«${login}»: вход в Steam...`)
+      else if (status === 'connected')  setNotice(`«${login}»: в сети`)
       else if (status === 'friending')  setNotice(`«${login}»: добавление в друзья...`)
+    })
+    // Запрос кода Steam Guard от main — показываем модалку ввода.
+    window.api.groups.onFriendsSteamGuard(({ accountId, domain }) => {
+      setGuardReq({ accountId, login: byId.get(accountId) || `#${accountId}`, domain })
     })
     try {
       const r = await window.api.groups.ensureFriends(group.id)
@@ -508,9 +547,17 @@ export default function FarmGroups() {
       }
     } finally {
       window.api.groups.offFriendsProgress()
+      window.api.groups.offFriendsSteamGuard()
+      setGuardReq(null)
       setFriendingId(null)
       setTimeout(() => setNotice(''), 6000)
     }
+  }
+
+  // Отправляет введённый код Steam Guard в main для ожидающей сессии.
+  const handleSubmitGuard = (code) => {
+    if (guardReq) window.api.groups.submitFriendsCode(guardReq.accountId, code)
+    setGuardReq(null)
   }
 
   return (
@@ -591,6 +638,14 @@ export default function FarmGroups() {
           group={conflict.group}
           busyAccounts={conflict.busyAccounts}
           onClose={() => setConflict(null)}
+        />
+      )}
+      {guardReq && (
+        <FriendGuardModal
+          login={guardReq.login}
+          domain={guardReq.domain}
+          onSubmit={handleSubmitGuard}
+          onClose={() => setGuardReq(null)}
         />
       )}
 

@@ -22,14 +22,34 @@ function waitFriend(session, steamId64, timeoutMs) {
 }
 
 class FriendManager {
-  // Делает всех аккаунтов группы взаимными друзьями. onProgress(accountId, status, message).
+  constructor() {
+    // accountId -> callback от steam-user, ждущий код Steam Guard.
+    this._guard = new Map()
+  }
+
+  // Передаёт код Steam Guard в ожидающую сессию аккаунта (из UI).
+  provideCode(accountId, code) {
+    const cb = this._guard.get(accountId)
+    if (cb) {
+      this._guard.delete(accountId)
+      console.log(`[FriendManager] provideCode -> account ${accountId}`)
+      try { cb(code) } catch (e) { console.log('[FriendManager] provideCode error:', e.message) }
+      return true
+    }
+    console.log(`[FriendManager] provideCode: нет ожидающего колбэка для account ${accountId}`)
+    return false
+  }
+
+  // Делает всех аккаунтов группы взаимными друзьями.
+  // onProgress(accountId, status, message); onGuard(accountId, domain) — запрос кода Steam Guard в UI.
   // Возвращает { ok, friended:[[id,id]], failed:[[id,id]], impossible:[{aId,bId}] } либо { ok:false, error }.
-  async ensureGroupFriends(groupId, onProgress = () => {}) {
+  async ensureGroupFriends(groupId, onProgress = () => {}, onGuard = () => {}) {
     const group = groupManager.get(groupId)
     if (!group || group.accounts.length < 2) {
       return { ok: false, error: 'В группе должно быть минимум 2 аккаунта' }
     }
     const ids = group.accounts.map(a => a.id)
+    console.log(`[FriendManager] ensureGroupFriends group ${groupId}, accounts: ${ids.join(',')}`)
 
     // Конфликт сессий: ни один аккаунт не должен быть в CS2/Farm-сессии.
     const busy = ids.filter(id => cs2Launcher.isRunning(id) || workerManager.workers.has(id))
@@ -41,30 +61,38 @@ class FriendManager {
     const meta = new Map(accountManager.getAll().map(a => [a.id, a]))
     const accounts = ids.map(id => {
       const m = meta.get(id) || {}
-      return { id, steamId: m.steamId || null, isLimited: !!m.isLimited }
+      return { id, steamId: m.steamId || null, isLimited: !!m.isLimited, login: m.login || `#${id}` }
     })
 
     // Поднять сессии последовательно (проще, щадит rate-limit логина).
     const sessions = new Map()
     for (const acc of accounts) {
       onProgress(acc.id, 'connecting', 'Вход в Steam...')
+      console.log(`[FriendManager] login ${acc.login} (id ${acc.id})...`)
       const s = new FriendSession(acc.id)
       try {
-        // Передаём onSteamGuard: это поднимает таймаут логина до 10 минут
-        // (иначе 30с) — успевает пройти подтверждение на телефоне (device
-        // confirmation) у аккаунтов без maFile. Callback не вызываем: для
-        // device-подтверждения вход завершается после approve на телефоне.
+        // onSteamGuard: поднимает таймаут логина до 10 минут и даёт UI запросить
+        // код Steam Guard. Колбэк сохраняем — provideCode() подаст в него код.
+        // Если у аккаунта device-подтверждение на телефоне — login завершится
+        // после approve и без кода (колбэк просто не понадобится).
         const sid = await s.connect({
-          onSteamGuard: (domain) => {
+          onSteamGuard: (domain, callback) => {
+            console.log(`[FriendManager] steamGuard requested for ${acc.login} (domain=${domain || 'mobile'})`)
+            this._guard.set(acc.id, callback)
             onProgress(acc.id, 'awaiting_guard', domain
-              ? `Нужен код Steam Guard из email (${domain})`
-              : 'Подтверди вход на телефоне (Steam Mobile)')
+              ? `Код Steam Guard из email (${domain})`
+              : 'Введи код Steam Guard из приложения Steam Mobile')
+            onGuard(acc.id, domain || null)
           },
         })
+        this._guard.delete(acc.id)
         if (sid) acc.steamId = sid
         sessions.set(acc.id, s)
+        console.log(`[FriendManager] ${acc.login} logged in, steamId=${acc.steamId}`)
         onProgress(acc.id, 'connected', 'В сети')
       } catch (e) {
+        this._guard.delete(acc.id)
+        console.log(`[FriendManager] login FAILED ${acc.login}: ${e.code || ''} ${e.message}`)
         onProgress(acc.id, 'error', e.message || 'Ошибка входа')
       }
     }
@@ -72,6 +100,7 @@ class FriendManager {
     // Пары считаем только по тем, у кого есть steamId и поднялась сессия.
     const usable = accounts.filter(a => a.steamId && sessions.has(a.id))
     const { pairs, impossible } = computeFriendPairs(usable)
+    console.log(`[FriendManager] usable=${usable.length}, pairs=${pairs.length}, impossible=${impossible.length}`)
 
     for (const { aId, bId } of impossible) {
       onProgress(aId, 'error', 'Оба аккаунта limited — дружба невозможна')
@@ -84,13 +113,15 @@ class FriendManager {
       const first = sessions.get(p.firstId)
       const second = sessions.get(p.secondId)
       onProgress(p.firstId, 'friending', 'Добавление в друзья...')
+      console.log(`[FriendManager] addFriend ${p.firstId}<->${p.secondId}`)
 
       // non-limited инициирует, затем второй принимает/взаимно.
-      await first.addFriendBySteamId(p.secondSteamId)
+      const r1 = await first.addFriendBySteamId(p.secondSteamId)
       await new Promise(r => setTimeout(r, 800))
-      await second.addFriendBySteamId(p.firstSteamId)
+      const r2 = await second.addFriendBySteamId(p.firstSteamId)
+      console.log(`[FriendManager] addFriend results: first=${JSON.stringify(r1)} second=${JSON.stringify(r2)}`)
 
-      const ok = await waitFriend(first, p.secondSteamId, 6000)
+      const ok = await waitFriend(first, p.secondSteamId, 8000)
       if (ok) {
         onProgress(p.firstId, 'friended', 'Друзья')
         onProgress(p.secondId, 'friended', 'Друзья')
@@ -102,6 +133,7 @@ class FriendManager {
     }
 
     for (const s of sessions.values()) s.close()
+    console.log(`[FriendManager] done. friended=${friended.length} failed=${failed.length} impossible=${impossible.length}`)
     return { ok: failed.length === 0 && impossible.length === 0, friended, failed, impossible }
   }
 }

@@ -90,12 +90,17 @@ export function setupIPC() {
   ipcMain.handle('friends:ensureGroup', async (_, groupId) => {
     const onProgress = (accountId, status, message) =>
       workerManager.send('friends:progress', { accountId, status, message })
+    const onGuard = (accountId, domain) =>
+      workerManager.send('friends:steamGuard', { accountId, domain })
     try {
-      return await friendManager.ensureGroupFriends(groupId, onProgress)
+      return await friendManager.ensureGroupFriends(groupId, onProgress, onGuard)
     } catch (e) {
       return { ok: false, error: e.message }
     }
   })
+
+  ipcMain.handle('friends:steamGuardCode', (_, accountId, code) =>
+    friendManager.provideCode(accountId, code))
 
   ipcMain.handle('farm:start',    (_, id) => workerManager.start(id))
   ipcMain.handle('farm:stop', async (_, id) => {
