@@ -36,6 +36,11 @@ contextBridge.exposeInMainWorld('api', {
     start:         (id)         => ipcRenderer.invoke('groups:start', id),
     stop:          (id)         => ipcRenderer.invoke('groups:stop', id),
     ensureFriends: (id)         => ipcRenderer.invoke('friends:ensureGroup', id),
+    onFriendsProgress: (cb) => {
+      ipcRenderer.removeAllListeners('friends:progress')
+      ipcRenderer.on('friends:progress', (_, d) => cb(d))
+    },
+    offFriendsProgress: () => ipcRenderer.removeAllListeners('friends:progress'),
   },
   farm: {
     start:    (id) => ipcRenderer.invoke('farm:start', id),

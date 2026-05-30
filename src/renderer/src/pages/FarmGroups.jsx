@@ -484,9 +484,18 @@ export default function FarmGroups() {
   }
 
   // Невидимо дружит аккаунты группы через steam-user (требует idle-аккаунты).
+  // Логин аккаунтов без maFile идёт через подтверждение на телефоне (Steam
+  // Mobile) — прогресс показывает, какой аккаунт ждёт подтверждения.
   const handleFriend = async (group) => {
     setFriendingId(group.id)
-    setNotice(`Дружим аккаунты группы «${group.name}» — это займёт время...`)
+    setNotice(`Дружим аккаунты группы «${group.name}» — следи за телефоном, подтверди вход для каждого аккаунта...`)
+    const byId = new Map(group.accounts.map(a => [a.id, a.login]))
+    window.api.groups.onFriendsProgress(({ accountId, status, message }) => {
+      const login = byId.get(accountId) || `#${accountId}`
+      if (status === 'awaiting_guard') setNotice(`«${login}»: ${message}`)
+      else if (status === 'connecting') setNotice(`«${login}»: вход в Steam...`)
+      else if (status === 'friending')  setNotice(`«${login}»: добавление в друзья...`)
+    })
     try {
       const r = await window.api.groups.ensureFriends(group.id)
       if (r?.ok) {
@@ -498,8 +507,9 @@ export default function FarmGroups() {
         setNotice(`Группа «${group.name}»: подружены не все (${bad} пар с проблемой)`)
       }
     } finally {
+      window.api.groups.offFriendsProgress()
       setFriendingId(null)
-      setTimeout(() => setNotice(''), 5000)
+      setTimeout(() => setNotice(''), 6000)
     }
   }
 

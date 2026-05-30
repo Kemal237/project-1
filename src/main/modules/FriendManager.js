@@ -50,7 +50,17 @@ class FriendManager {
       onProgress(acc.id, 'connecting', 'Вход в Steam...')
       const s = new FriendSession(acc.id)
       try {
-        const sid = await s.connect()
+        // Передаём onSteamGuard: это поднимает таймаут логина до 10 минут
+        // (иначе 30с) — успевает пройти подтверждение на телефоне (device
+        // confirmation) у аккаунтов без maFile. Callback не вызываем: для
+        // device-подтверждения вход завершается после approve на телефоне.
+        const sid = await s.connect({
+          onSteamGuard: (domain) => {
+            onProgress(acc.id, 'awaiting_guard', domain
+              ? `Нужен код Steam Guard из email (${domain})`
+              : 'Подтверди вход на телефоне (Steam Mobile)')
+          },
+        })
         if (sid) acc.steamId = sid
         sessions.set(acc.id, s)
         onProgress(acc.id, 'connected', 'В сети')
