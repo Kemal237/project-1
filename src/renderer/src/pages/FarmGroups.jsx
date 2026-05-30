@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Layers, Play, Pencil, Trash2, Search, Shield, ShieldCheck, ShieldOff, AlertTriangle, Loader, Square, Eye } from 'lucide-react'
+import { Plus, Layers, Play, Pencil, Trash2, Search, Shield, ShieldCheck, ShieldOff, AlertTriangle, Loader, Square, Eye, UserPlus } from 'lucide-react'
 
 // Все модалки FarmGroups рендерятся через Portal в document.body чтобы
 // перекрывать TitleBar (у которого -webkit-app-region: drag создаёт
@@ -234,7 +234,7 @@ function GroupEditorModal({ initial, accounts, onSave, onClose }) {
 // Карточка одной группы в списке: имя, описание, аккаунты, кнопки действий.
 // Кнопки: Запустить/Стоп, Отслеживать (открывает отдельное окно), Редактировать, Удалить.
 // isRunning=true → зелёная обводка + бейдж "Онлайн" сверху по центру.
-function GroupCard({ group, onLaunch, onTrack, onEdit, onDelete, isRunning }) {
+function GroupCard({ group, onLaunch, onTrack, onEdit, onDelete, onFriend, friending, isRunning }) {
   const noPrimeCount = group.accounts.filter(a => !a.isPrime).length
   return (
     <div className={`card p-4 space-y-3 transition-colors relative ${
@@ -281,6 +281,16 @@ function GroupCard({ group, onLaunch, onTrack, onEdit, onDelete, isRunning }) {
             onClick={() => onTrack(group)}
           >
             <Eye size={13} className="text-purple-400" />
+          </button>
+          <button
+            className="btn-ghost p-1.5"
+            title="Подружить аккаунты группы (Steam, в фоне)"
+            onClick={() => onFriend(group)}
+            disabled={friending}
+          >
+            {friending
+              ? <Loader size={13} className="animate-spin text-blue-400" />
+              : <UserPlus size={13} className="text-blue-400" />}
           </button>
           <button className="btn-ghost p-1.5" title="Редактировать" onClick={() => onEdit(group)}>
             <Pencil size={13} className="text-text-muted" />
@@ -389,6 +399,7 @@ export default function FarmGroups() {
   const [editing, setEditing]     = useState(null)   // { initial: null|group } или null
   const [deleting, setDeleting]   = useState(null)   // group или null
   const [notice, setNotice]       = useState('')     // toast
+  const [friendingId, setFriendingId] = useState(null)
   // Live-статусы аккаунтов (с воркеров) — для isGroupRunning и блок-модалки.
   const [workerStatuses, setWorkerStatuses] = useState({})
   // Конфликт-модалка: { group, busyAccounts: [{login, status}] }
@@ -472,6 +483,26 @@ export default function FarmGroups() {
     await window.api.groups.openTracking(group.id)
   }
 
+  // Невидимо дружит аккаунты группы через steam-user (требует idle-аккаунты).
+  const handleFriend = async (group) => {
+    setFriendingId(group.id)
+    setNotice(`Дружим аккаунты группы «${group.name}» — это займёт время...`)
+    try {
+      const r = await window.api.groups.ensureFriends(group.id)
+      if (r?.ok) {
+        setNotice(`Группа «${group.name}»: все аккаунты подружены ✓`)
+      } else if (r?.error) {
+        setNotice(r.error)
+      } else {
+        const bad = (r?.failed?.length || 0) + (r?.impossible?.length || 0)
+        setNotice(`Группа «${group.name}»: подружены не все (${bad} пар с проблемой)`)
+      }
+    } finally {
+      setFriendingId(null)
+      setTimeout(() => setNotice(''), 5000)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -523,6 +554,8 @@ export default function FarmGroups() {
               onTrack={handleTrack}
               onEdit={(group) => setEditing({ initial: group })}
               onDelete={(group) => setDeleting(group)}
+              onFriend={handleFriend}
+              friending={friendingId === g.id}
             />
           ))}
         </div>
