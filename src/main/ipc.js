@@ -13,6 +13,7 @@ import steamConfigPatcher from './modules/SteamConfigPatcher'
 import botAutomation     from './modules/BotAutomation'
 import inputMutex        from './modules/InputMutex'
 import groupManager      from './modules/GroupManager'
+import friendManager     from './modules/FriendManager'
 
 export function setupIPC() {
   // Создаём боксы Sandboxie для всех известных аккаунтов при старте (пока ничего не запущено).
@@ -84,6 +85,16 @@ export function setupIPC() {
   ipcMain.handle('groups:delete',  (_, id)      => {
     try { groupManager.delete(id); return { ok: true } }
     catch (e) { return { ok: false, error: e.message } }
+  })
+
+  ipcMain.handle('friends:ensureGroup', async (_, groupId) => {
+    const onProgress = (accountId, status, message) =>
+      workerManager.send('friends:progress', { accountId, status, message })
+    try {
+      return await friendManager.ensureGroupFriends(groupId, onProgress)
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
   })
 
   ipcMain.handle('farm:start',    (_, id) => workerManager.start(id))

@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
     openTracking:  (id)         => ipcRenderer.invoke('groups:openTracking', id),
     start:         (id)         => ipcRenderer.invoke('groups:start', id),
     stop:          (id)         => ipcRenderer.invoke('groups:stop', id),
+    ensureFriends: (id)         => ipcRenderer.invoke('friends:ensureGroup', id),
   },
   farm: {
     start:    (id) => ipcRenderer.invoke('farm:start', id),
