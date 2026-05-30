@@ -9,6 +9,7 @@ import gsiServer from './CS2GSIServer'
 import settings from './Settings'
 import sandboxSteamGuard from './SandboxSteamGuard'
 import inputMutex from './InputMutex'
+import { portForAccount } from './CS2NetConsole'
 
 const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
@@ -164,6 +165,7 @@ class CS2Launcher extends EventEmitter {
       }
       this._spawnInBox(sbPath, boxName, steamPath, [
         '-applaunch', '730', ...CS2_FLAGS,
+        '-netconport', String(portForAccount(accountId)),
       ])
 
       // Ждём появления НАШЕГО sandboxed cs2.exe без жёсткого таймаута.
