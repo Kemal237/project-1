@@ -15,6 +15,7 @@ import inputMutex        from './modules/InputMutex'
 import groupManager      from './modules/GroupManager'
 import friendManager     from './modules/FriendManager'
 import partyManager    from './modules/PartyManager'
+import windowGrid     from './modules/WindowGrid'
 
 export function setupIPC() {
   // Создаём боксы Sandboxie для всех известных аккаунтов при старте (пока ничего не запущено).
@@ -325,6 +326,8 @@ export function setupIPC() {
   ipcMain.handle('automation:status', (_, accountId) => ({
     running: botAutomation.isRunning(accountId),
   }))
+
+  ipcMain.handle('windows:arrangeGrid', (_, opts = {}) => windowGrid.arrange(opts))
 
   ipcMain.handle('updater:getVersion', () => app.getVersion())
   ipcMain.handle('updater:check',     () => app.isPackaged ? autoUpdater.checkForUpdates() : null)

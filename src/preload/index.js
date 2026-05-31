@@ -139,6 +139,9 @@ contextBridge.exposeInMainWorld('api', {
     },
     offAction: () => ipcRenderer.removeAllListeners('automation:action'),
   },
+  windows: {
+    arrangeGrid: (opts) => ipcRenderer.invoke('windows:arrangeGrid', opts),
+  },
   dialog: {
     openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
     openMaFile: () => ipcRenderer.invoke('dialog:openMaFile'),

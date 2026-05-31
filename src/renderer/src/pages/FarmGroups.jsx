@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Layers, Play, Pencil, Trash2, Search, Shield, ShieldCheck, ShieldOff, AlertTriangle, Loader, Square, Eye, UserPlus, Users } from 'lucide-react'
+import { Plus, Layers, Play, Pencil, Trash2, Search, Shield, ShieldCheck, ShieldOff, AlertTriangle, Loader, Square, Eye, UserPlus, Users, LayoutGrid } from 'lucide-react'
 
 // Все модалки FarmGroups рендерятся через Portal в document.body чтобы
 // перекрывать TitleBar (у которого -webkit-app-region: drag создаёт
@@ -620,12 +620,29 @@ export default function FarmGroups() {
             {groups.length} {groups.length === 1 ? 'группа' : 'групп'}
           </p>
         </div>
-        <button
-          className="btn-primary transition-all active:scale-95"
-          onClick={() => setEditing({ initial: null })}
-        >
-          <Plus size={14} /> Создать группу
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-ghost transition-all active:scale-95"
+            onClick={async () => {
+              const r = await window.api.windows.arrangeGrid({})
+              setNotice(r?.error
+                ? `Ошибка раскладки: ${r.error}`
+                : r?.moved
+                  ? `Разложено окон: ${r.moved}`
+                  : 'Нет запущенных окон CS2')
+              setTimeout(() => setNotice(''), 2500)
+            }}
+            title="Разложить окна CS2 по сетке"
+          >
+            <LayoutGrid size={14} /> Разложить окна
+          </button>
+          <button
+            className="btn-primary transition-all active:scale-95"
+            onClick={() => setEditing({ initial: null })}
+          >
+            <Plus size={14} /> Создать группу
+          </button>
+        </div>
       </div>
 
       {loading ? (
