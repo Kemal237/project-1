@@ -56,18 +56,19 @@ class CS2Launcher extends EventEmitter {
     if (this._active.has(accountId)) return
     const { useMutex = false } = options
 
+    // Проверяем зависимости ДО добавления в _active — иначе ошибка попадёт в catch,
+    // где stoppedByUser = !_active.has(accountId) = true, и ошибка проглатывается.
+    const sbPath = this._findSandboxie()
+    if (!sbPath) throw new Error('Sandboxie не найден. Проверь установку.')
+    const steamPath = await steamConfigPatcher.detectSteamPath()
+    if (!steamPath) throw new Error('Steam не найден. Установи Steam.')
+    const cs2Path = await steamConfigPatcher.detectCS2Path(steamPath)
+    if (!cs2Path) throw new Error('CS2 не найден. Убедись что игра установлена через Steam.')
+
+    const boxName = `CS2Bot_${accountId}`
+    this._active.set(accountId, { boxName, sbPath, steamPath, cs2Path })
+
     try {
-      const sbPath = this._findSandboxie()
-      if (!sbPath) throw new Error('Sandboxie не найден. Проверь установку.')
-
-      const steamPath = await steamConfigPatcher.detectSteamPath()
-      if (!steamPath) throw new Error('Steam не найден. Установи Steam.')
-
-      const cs2Path = await steamConfigPatcher.detectCS2Path(steamPath)
-      if (!cs2Path) throw new Error('CS2 не найден. Убедись что игра установлена через Steam.')
-
-      const boxName = `CS2Bot_${accountId}`
-      this._active.set(accountId, { boxName, sbPath, steamPath, cs2Path })
 
       onStatus('cs2_preparing', 'Подготовка бокса Sandboxie...')
       await this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)

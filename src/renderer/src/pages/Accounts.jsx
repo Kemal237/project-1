@@ -618,7 +618,7 @@ export default function Accounts() {
     setGuardIndex(i => Math.max(0, i - 1))
   }
 
-  const CS2_ACTIVE = new Set(['queued', 'cs2_preparing', 'awaiting_guard', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
+  const CS2_ACTIVE = new Set(['syncing', 'queued', 'cs2_preparing', 'awaiting_guard', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_launching', 'cs2_loading', 'cs2_lobby', 'cs2_match_loading', 'cs2_in_match'])
 
   // Ищет аккаунт у которого статус "идёт авто-вход". Возвращает null если все
   // либо ещё не запущены, либо уже залогинены / в CS2.

@@ -83,14 +83,6 @@ export class SteamWorker extends EventEmitter {
           console.log(`[SteamWorker ${this.accountId}] save steamId failed:`, e.message)
         }
       }
-      client.once('user', (sid, user) => {
-        if (sid.getSteamID64() === steamId64 && user?.player_name) {
-          try { accountManager.update(this.accountId, { personaName: user.player_name, needsSync: false }) } catch (e) {
-            console.log(`[SteamWorker ${this.accountId}] save personaName failed:`, e.message)
-          }
-          console.log(`[SteamWorker ${this.accountId}] personaName saved: ${user.player_name}`)
-        }
-      })
       this._setupClientEvents()
     } catch (err) {
       if (this._stopped) return
@@ -110,6 +102,8 @@ export class SteamWorker extends EventEmitter {
     if (this._stopped) return
     const { accountId } = this
     const hasPrime = licenses.some(l => l.package_id === PRIME_PACKAGE_ID)
+    console.log(`[SteamWorker ${accountId}] licenses (${licenses.length}): ${licenses.map(l => l.package_id).join(', ')}`)
+    console.log(`[SteamWorker ${accountId}] hasPrime=${hasPrime} (looking for package_id=${PRIME_PACKAGE_ID})`)
     accountManager.update(accountId, { isPrime: hasPrime })
 
     if (!hasPrime) {
@@ -120,6 +114,20 @@ export class SteamWorker extends EventEmitter {
       client.logOff()
       return
     }
+
+    // Регистрируем слушатель ДО setPersona — user event может прийти раньше чем
+    // вернётся await login() в _connect(), поэтому не можем добавить его там.
+    const steamId64 = client.steamID?.getSteamID64?.()
+    const onUserEvent = (sid, user) => {
+      if (sid.getSteamID64() === steamId64 && user?.player_name) {
+        client.removeListener('user', onUserEvent)
+        try { accountManager.update(this.accountId, { personaName: user.player_name, needsSync: false }) } catch (e) {
+          console.log(`[SteamWorker ${this.accountId}] save personaName failed:`, e.message)
+        }
+        console.log(`[SteamWorker ${this.accountId}] personaName saved: ${user.player_name}`)
+      }
+    }
+    client.on('user', onUserEvent)
 
     this._gc = new CS2GCClient(client, this.accountId)
     this._gc.on('drop',      (item)           => this.emit('drop',      { accountId: this.accountId, item }))

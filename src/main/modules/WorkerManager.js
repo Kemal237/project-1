@@ -210,11 +210,14 @@ class WorkerManager {
       // Опрашиваем БД — когда needs_sync станет 0, синк завершён
       const poll = setInterval(() => {
         const a = accountManager.getAll().find(a => a.id === accountId)
-        if (a && !a.needsSync) settle()
+        if (a && !a.needsSync && a.personaName) settle()
       }, 500)
 
       const timer = setTimeout(() => settle(new Error('Синхронизация: превышен таймаут (2 мин)')), 120_000)
 
+      worker.on('statusChange', ({ status, message }) => {
+        if (status === 'no_prime') settle(new Error(message || 'Нет Prime-статуса'))
+      })
       worker.on('error', ({ message }) => settle(new Error(message)))
 
       worker.start().catch(settle)
