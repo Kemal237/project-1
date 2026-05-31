@@ -9,6 +9,7 @@ import gsiServer from './CS2GSIServer'
 import settings from './Settings'
 import sandboxSteamGuard from './SandboxSteamGuard'
 import inputMutex from './InputMutex'
+import cs2Optimizer from './CS2Optimizer'
 
 const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
@@ -30,9 +31,9 @@ const CS2_FLAGS = [
   '-w', CS2_W, '-h', CS2_H,
   '+r_mode_width', CS2_W, '+r_mode_height', CS2_H,
   '-novid',
-  '+fps_max', '30',
-  '+r_dynamic', '0',
-  '+mat_queue_mode', '0',
+  '-nosound',
+  '-high',
+  '-swapcores',
   '-condebug',
 ]
 
@@ -161,6 +162,7 @@ class CS2Launcher extends EventEmitter {
 
       onStatus('cs2_launching', 'Запуск CS2...')
       this._patchCS2VideoSettings(cs2Path)
+      await cs2Optimizer.apply(cs2Path)
       // GSI config файл — один раз, виден всем боксам через OpenFilePath steamapps.
       try { this._writeGsiConfig(cs2Path) } catch (e) {
         console.log('[CS2Launcher] GSI cfg write:', e.message)
