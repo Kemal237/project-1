@@ -10,6 +10,8 @@ import settings from './Settings'
 import sandboxSteamGuard from './SandboxSteamGuard'
 import inputMutex from './InputMutex'
 import cs2Optimizer from './CS2Optimizer'
+import { screen } from 'electron'
+import { computeGrid } from './WindowGridMath'
 
 const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
@@ -167,8 +169,10 @@ class CS2Launcher extends EventEmitter {
       try { this._writeGsiConfig(cs2Path) } catch (e) {
         console.log('[CS2Launcher] GSI cfg write:', e.message)
       }
+      const gridFlags = this._gridLaunchFlags()
+      console.log(`[CS2Launcher ${accountId}] grid launch flags: ${gridFlags.join(' ') || '(none)'}`)
       this._spawnInBox(sbPath, boxName, steamPath, [
-        '-applaunch', '730', ...CS2_FLAGS,
+        '-applaunch', '730', ...CS2_FLAGS, ...gridFlags,
       ])
 
       // Ждём появления НАШЕГО sandboxed cs2.exe без жёсткого таймаута.
@@ -390,6 +394,30 @@ class CS2Launcher extends EventEmitter {
       await new Promise(r => setTimeout(r, intervalMs))
     }
     console.log(`[CS2Launcher ${accountId}] steamId NOT extracted after ${attempts} attempts (fallback: auto-mapping via GSI will be used when single CS2 is running)`)
+  }
+
+  // Вычисляет -x/-y launch-флаги для окна запускающегося бота, чтобы оно
+  // появилось в своей ячейке сетки. Слот = число уже запущенных CS2
+  // (записи _active с cs2Pid). Столбцы: настройка window_grid_cols или дефолт 2.
+  // Возвращает [] если авто-раскладка выключена.
+  _gridLaunchFlags() {
+    if (settings.get('window_grid_autoarrange') === 'false') return []
+
+    const slotIndex = [...this._active.values()].filter(e => e.cs2Pid).length
+    const colsRaw   = parseInt(settings.get('window_grid_cols'), 10)
+    const cols      = Number.isInteger(colsRaw) && colsRaw > 0 ? colsRaw : 2
+
+    const cells = computeGrid(slotIndex + 1, { cols })
+    const cell  = cells[slotIndex]
+    if (!cell) return []
+
+    let baseX = 0, baseY = 0
+    try {
+      const wa = screen.getPrimaryDisplay().workArea
+      baseX = wa.x; baseY = wa.y
+    } catch {}
+
+    return ['-x', String(baseX + cell.x), '-y', String(baseY + cell.y)]
   }
 
   // Пишет GSI config файл в CS2 cfg-папку. CS2 шлёт state на uri при каждом
