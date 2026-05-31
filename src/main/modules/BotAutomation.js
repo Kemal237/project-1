@@ -1,4 +1,4 @@
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -88,6 +88,38 @@ $null = [WinAct]::AttachThreadInput($ourTid, $targetTid, $false)
 Write-Output $(if ($ok) { 'OK' } else { 'FAIL' })
 `.trim()
 
+const CLICK_AT_PS = `
+param([long]$Hwnd, [int]$X, [int]$Y)
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class WinClick {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT { public int x, y; }
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, IntPtr dwExtraInfo);
+  public const uint MOUSEEVENTF_LEFTDOWN = 0x02;
+  public const uint MOUSEEVENTF_LEFTUP   = 0x04;
+}
+'@
+$h = [IntPtr]$Hwnd
+if (-not [WinClick]::IsWindow($h)) { Write-Output 'INVALID'; exit }
+[WinClick]::SetForegroundWindow($h) | Out-Null
+Start-Sleep -Milliseconds 200
+$pt = New-Object WinClick+POINT
+$pt.x = $X; $pt.y = $Y
+[WinClick]::ClientToScreen($h, [ref]$pt) | Out-Null
+[WinClick]::SetCursorPos($pt.x, $pt.y) | Out-Null
+Start-Sleep -Milliseconds 100
+[WinClick]::mouse_event([WinClick]::MOUSEEVENTF_LEFTDOWN, 0, 0, 0, [IntPtr]::Zero)
+Start-Sleep -Milliseconds 80
+[WinClick]::mouse_event([WinClick]::MOUSEEVENTF_LEFTUP,   0, 0, 0, [IntPtr]::Zero)
+Write-Output 'OK'
+`.trim()
+
 class BotAutomation {
   constructor() {
     this.webContents = null
@@ -118,11 +150,10 @@ class BotAutomation {
     this._ensureScripts()
 
     const entry = cs2Launcher._active.get(accountId)
-    const boxName = entry?.boxName
-    if (!boxName) throw new Error('Не найден boxName для аккаунта')
+    if (!entry?.boxName) throw new Error('Не найден boxName для аккаунта')
 
-    const pid = this._findCs2PidInBox(boxName, entry.sbPath)
-    if (!pid) throw new Error('cs2.exe не найден в боксе ' + boxName)
+    const pid = entry.cs2Pid
+    if (!pid) throw new Error('cs2.exe PID не сохранён — перезапусти бота через панель')
 
     const hwnd = this._findHwndByPid(pid)
     if (!hwnd || hwnd === 0) throw new Error('Окно CS2 не найдено по PID ' + pid)
@@ -152,14 +183,41 @@ class BotAutomation {
     for (const id of [...this._sessions.keys()]) this.stop(id)
   }
 
+  getHwndForAccount(accountId) {
+    const entry = cs2Launcher._active.get(accountId)
+    if (!entry?.cs2Pid) return 0
+    this._ensureScripts()
+    return this._findHwndByPid(entry.cs2Pid)
+  }
+
+  async clickAt(hwnd, relX, relY) {
+    if (!hwnd || hwnd === 0) return false
+    const CS2_CW = 640, CS2_CH = 480
+    const x = Math.round(relX * CS2_CW)
+    const y = Math.round(relY * CS2_CH)
+    const script = join(PS_DIR, 'click-at.ps1')
+    if (!existsSync(script)) this._ensureScripts()
+    try {
+      const out = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}" -Hwnd ${hwnd} -X ${x} -Y ${y}`,
+        { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim()
+      return out === 'OK'
+    } catch (e) {
+      console.log('[BotAutomation] clickAt error:', e.message)
+      return false
+    }
+  }
+
   // === Internal ===
 
   _ensureScripts() {
     if (this._scriptsWritten) return
     try {
       mkdirSync(PS_DIR, { recursive: true })
-      writeFileSync(join(PS_DIR, 'find-hwnd.ps1'), HWND_BY_PID_PS, 'utf8')
-      writeFileSync(join(PS_DIR, 'activate-window.ps1'), ACTIVATE_PS, 'utf8')
+      writeFileSync(join(PS_DIR, 'find-hwnd.ps1'),      HWND_BY_PID_PS, 'utf8')
+      writeFileSync(join(PS_DIR, 'activate-window.ps1'), ACTIVATE_PS,   'utf8')
+      writeFileSync(join(PS_DIR, 'click-at.ps1'),        CLICK_AT_PS,   'utf8')
       this._scriptsWritten = true
     } catch (e) {
       console.log('[BotAutomation] _ensureScripts error:', e.message)
@@ -240,19 +298,28 @@ class BotAutomation {
 
   // === Win32 helpers через временные PS-скрипты ===
 
-  // Находит PID sandboxed cs2.exe. Использует фильтр по модулю SbieDll.dll —
-  // надёжный маркер sandboxed процесса (тот же подход что CS2Launcher._countBoxedProcesses).
-  // На текущем этапе панель работает с одним CS2 за раз, поэтому возвращаем первый matching.
-  // boxName/sbPath приняты для будущего различения боксов (когда будет multi-window).
-  _findCs2PidInBox(_boxName, _sbPath) {
+  _findCs2PidInBox(boxName, sbPath) {
+    if (!/^[A-Za-z0-9_-]+$/.test(boxName)) {
+      console.log('[BotAutomation] _findCs2PidInBox: invalid boxName:', boxName)
+      return null
+    }
     try {
-      const out = execSync(
-        `powershell -NoProfile -Command "Get-Process cs2 -EA SilentlyContinue | Where-Object { try { $_.Modules.ModuleName -contains 'SbieDll.dll' } catch { $false } } | Select-Object -ExpandProperty Id"`,
+      const listOut = execFileSync(
+        join(sbPath, 'Start.exe'),
+        [`/box:${boxName}`, '/list_pids'],
+        { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim()
+      const boxPids = listOut.split(/\s+/).map(Number).filter(Boolean)
+      if (!boxPids.length) return null
+
+      const cs2Out = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process cs2 -EA SilentlyContinue | Select-Object -ExpandProperty Id"`,
         { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] }
       ).trim()
-      if (!out) return null
-      const pids = out.split(/\s+/).map(Number).filter(Boolean)
-      return pids[0] || null
+      if (!cs2Out) return null
+
+      const cs2Pids = cs2Out.split(/\s+/).map(Number).filter(Boolean)
+      return cs2Pids.find(pid => boxPids.includes(pid)) || null
     } catch (e) {
       console.log('[BotAutomation] _findCs2PidInBox error:', e.message)
       return null

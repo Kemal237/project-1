@@ -4,11 +4,14 @@ import accountManager from './AccountManager'
 import gsiServer from './CS2GSIServer'
 import cs2Launcher from './CS2Launcher'
 
+const EVENT_LOG_LIMIT = 300
+
 class WorkerManager {
   constructor() {
     this.workers     = new Map()
     this.webContents = null
     this._gsiBound   = false
+    this._eventLog   = new Map() // accountId → [{type, accountId, ts, ...}]
   }
 
   init(webContents) {
@@ -20,9 +23,35 @@ class WorkerManager {
   // tracking-окна групп, automation-окна). Без этого tracking-окно с другим
   // webContents не получает статусы — main отправлял только в this.webContents.
   send(channel, payload) {
+    const id = payload?.accountId
+    if (id != null) {
+      if (channel === 'worker:statusChange') {
+        this._logEvent(id, 'status', { status: payload.status, message: payload.message })
+      } else if (channel === 'worker:error') {
+        this._logEvent(id, 'error', { message: payload.message })
+      } else if (channel === 'worker:drop') {
+        this._logEvent(id, 'drop', { item: payload.item })
+      }
+    }
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send(channel, payload)
     }
+  }
+
+  _logEvent(accountId, type, data) {
+    if (!this._eventLog.has(accountId)) this._eventLog.set(accountId, [])
+    const log = this._eventLog.get(accountId)
+    log.push({ type, accountId, ts: Date.now(), ...data })
+    if (log.length > EVENT_LOG_LIMIT) log.splice(0, log.length - EVENT_LOG_LIMIT)
+  }
+
+  getEventLog(accountIds) {
+    const result = []
+    for (const id of accountIds) {
+      const log = this._eventLog.get(id)
+      if (log) result.push(...log)
+    }
+    return result.sort((a, b) => a.ts - b.ts)
   }
 
   _bindGsi() {
@@ -145,8 +174,8 @@ class WorkerManager {
 
   getAllStatuses() {
     const result = {}
-    for (const [id, worker] of this.workers) {
-      result[id] = { status: worker.status }
+    for (const account of accountManager.getAll()) {
+      result[account.id] = { status: account.status }
     }
     return result
   }
@@ -154,6 +183,53 @@ class WorkerManager {
   provideCode(accountId, code) {
     const worker = this.workers.get(accountId)
     if (worker) worker.provideCode(code)
+  }
+
+  async ensureSynced(accountId, sendStatus) {
+    const account = accountManager.getAll().find(a => a.id === accountId)
+    if (!account) return
+    if (!account.needsSync && account.personaName) return
+
+    sendStatus('syncing', 'Синхронизация данных аккаунта...')
+
+    await new Promise((resolve, reject) => {
+      const worker = new SteamWorker(accountId)
+      let settled = false
+
+      const settle = (err) => {
+        if (settled) return
+        settled = true
+        clearInterval(poll)
+        clearTimeout(timer)
+        worker.removeAllListeners()
+        worker.stop()
+        if (err) reject(err)
+        else resolve()
+      }
+
+      // Опрашиваем БД — когда needs_sync станет 0, синк завершён
+      const poll = setInterval(() => {
+        const a = accountManager.getAll().find(a => a.id === accountId)
+        if (a && !a.needsSync) settle()
+      }, 500)
+
+      const timer = setTimeout(() => settle(new Error('Синхронизация: превышен таймаут (2 мин)')), 120_000)
+
+      worker.on('error', ({ message }) => settle(new Error(message)))
+
+      worker.start().catch(settle)
+    })
+  }
+
+  getGcClient(accountId) {
+    return this.workers.get(accountId)?._gc || null
+  }
+
+  getSteamId32(accountId) {
+    const worker = this.workers.get(accountId)
+    const sid64  = worker?.client?.steamID?.getSteamID64?.()
+    if (!sid64) return null
+    return Number(BigInt(sid64) - BigInt('76561197960265728'))
   }
 }
 

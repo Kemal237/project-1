@@ -6,7 +6,7 @@ class AccountManager {
       SELECT a.id, a.login, a.proxy_id, a.status, a.xp_progress,
              a.drops_total, a.drops_this_week, a.last_drop_at, a.last_login_at,
              a.is_prime, a.is_limited, a.warmup_week, a.notes, a.created_at,
-             a.shared_secret_enc, a.identity_secret_enc, a.steam_id,
+             a.shared_secret_enc, a.identity_secret_enc, a.steam_id, a.persona_name,
              p.host AS proxy_host, p.port AS proxy_port,
              p.username AS proxy_user, p.type AS proxy_type, p.is_valid AS proxy_valid
       FROM accounts a LEFT JOIN proxies p ON a.proxy_id = p.id
@@ -18,6 +18,7 @@ class AccountManager {
       lastLoginAt: r.last_login_at, isPrime: !!r.is_prime,
       isLimited: !!r.is_limited, warmupWeek: r.warmup_week,
       notes: r.notes, createdAt: r.created_at, steamId: r.steam_id || null,
+      personaName: r.persona_name || null, needsSync: !!r.needs_sync,
       hasSharedSecret:   !!db.decrypt(r.shared_secret_enc),
       hasIdentitySecret: !!db.decrypt(r.identity_secret_enc),
       proxy: r.proxy_host ? {
@@ -56,11 +57,18 @@ class AccountManager {
       warmupWeek:     ['warmup_week',         v => v],
       notes:          ['notes',               v => v],
       steamId:        ['steam_id',            v => v ? String(v) : null],
+      personaName:    ['persona_name',        v => v || null],
+      needsSync:      ['needs_sync',          v => v ? 1 : 0],
     }
     const fields = [], values = []
     for (const [key, [col, fn]] of Object.entries(map))
       if (data[key] !== undefined) { fields.push(`${col} = ?`); values.push(fn(data[key])) }
     if (!fields.length) return
+    // Смена учётных данных требует повторной синхронизации через Farm Start
+    if (['password', 'sharedSecret', 'identitySecret'].some(k => data[k] !== undefined)) {
+      fields.push('needs_sync = ?')
+      values.push(1)
+    }
     values.push(id)
     db.run(`UPDATE accounts SET ${fields.join(', ')} WHERE id = ?`, values)
   }

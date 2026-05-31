@@ -47,6 +47,13 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('friends:steamGuard', (_, d) => cb(d))
     },
     offFriendsSteamGuard: () => ipcRenderer.removeAllListeners('friends:steamGuard'),
+    getEventLog: (accountIds) => ipcRenderer.invoke('groups:getEventLog', accountIds),
+    gatherParty: (id) => ipcRenderer.invoke('groups:gatherParty', id),
+    onPartyProgress: (cb) => {
+      ipcRenderer.removeAllListeners('party:progress')
+      ipcRenderer.on('party:progress', (_, d) => cb(d))
+    },
+    offPartyProgress: () => ipcRenderer.removeAllListeners('party:progress'),
   },
   farm: {
     start:    (id) => ipcRenderer.invoke('farm:start', id),

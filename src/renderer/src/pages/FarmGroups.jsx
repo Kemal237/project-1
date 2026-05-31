@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Layers, Play, Pencil, Trash2, Search, Shield, ShieldCheck, ShieldOff, AlertTriangle, Loader, Square, Eye, UserPlus } from 'lucide-react'
+import { Plus, Layers, Play, Pencil, Trash2, Search, Shield, ShieldCheck, ShieldOff, AlertTriangle, Loader, Square, Eye, UserPlus, Users } from 'lucide-react'
 
 // Все модалки FarmGroups рендерятся через Portal в document.body чтобы
 // перекрывать TitleBar (у которого -webkit-app-region: drag создаёт
@@ -234,7 +234,18 @@ function GroupEditorModal({ initial, accounts, onSave, onClose }) {
 // Карточка одной группы в списке: имя, описание, аккаунты, кнопки действий.
 // Кнопки: Запустить/Стоп, Отслеживать (открывает отдельное окно), Редактировать, Удалить.
 // isRunning=true → зелёная обводка + бейдж "Онлайн" сверху по центру.
-function GroupCard({ group, onLaunch, onTrack, onEdit, onDelete, onFriend, friending, isRunning }) {
+function GroupCard({ group, onLaunch, onTrack, onEdit, onDelete, onFriend, friending, onGather, isRunning }) {
+  const [gathering, setGathering] = useState(false)
+
+  const handleGatherClick = async () => {
+    setGathering(true)
+    try {
+      await onGather(group)
+    } finally {
+      setGathering(false)
+    }
+  }
+
   const noPrimeCount = group.accounts.filter(a => !a.isPrime).length
   return (
     <div className={`card p-4 space-y-3 transition-colors relative ${
@@ -291,6 +302,16 @@ function GroupCard({ group, onLaunch, onTrack, onEdit, onDelete, onFriend, frien
             {friending
               ? <Loader size={13} className="animate-spin text-blue-400" />
               : <UserPlus size={13} className="text-blue-400" />}
+          </button>
+          <button
+            className="btn-ghost p-1.5"
+            title="Собрать ботов в пати (Wingman)"
+            onClick={handleGatherClick}
+            disabled={gathering}
+          >
+            {gathering
+              ? <Loader size={13} className="animate-spin text-orange-400" />
+              : <Users size={13} className="text-orange-400" />}
           </button>
           <button className="btn-ghost p-1.5" title="Редактировать" onClick={() => onEdit(group)}>
             <Pencil size={13} className="text-text-muted" />
@@ -554,6 +575,36 @@ export default function FarmGroups() {
     }
   }
 
+  // Собирает ботов группы в одно пати (Wingman). Прогресс по парам
+  // транслируется через onPartyProgress и отображается в notice.
+  const handleGather = async (group) => {
+    setNotice(null)
+    window.api.groups.onPartyProgress((d) => {
+      if (d.type === 'pair') {
+        const msg = d.status === 'done'
+          ? `Пара ${d.leaderId}+${d.memberId}: готово ✓`
+          : d.status === 'error'
+            ? `Пара ${d.leaderId}+${d.memberId}: ошибка — ${d.error}`
+            : `Собираем пару ${d.leaderId}+${d.memberId}...`
+        setNotice(msg)
+      }
+    })
+    try {
+      const r = await window.api.groups.gatherParty(group.id)
+      if (r?.ok) {
+        setNotice(`Группа «${group.name}»: все пати собраны ✓`)
+      } else {
+        const errMsgs = r?.results?.filter(x => !x.ok).map(x => x.error).filter(Boolean)
+        setNotice(`Ошибка: ${errMsgs?.length ? errMsgs.join('; ') : (r?.error || 'неизвестно')}`)
+      }
+    } catch (e) {
+      setNotice(`Ошибка: ${e.message}`)
+    } finally {
+      window.api.groups.offPartyProgress()
+      setTimeout(() => setNotice(''), 6000)
+    }
+  }
+
   // Отправляет введённый код Steam Guard в main для ожидающей сессии.
   const handleSubmitGuard = (code) => {
     if (guardReq) window.api.groups.submitFriendsCode(guardReq.accountId, code)
@@ -613,6 +664,7 @@ export default function FarmGroups() {
               onDelete={(group) => setDeleting(group)}
               onFriend={handleFriend}
               friending={friendingId === g.id}
+              onGather={handleGather}
             />
           ))}
         </div>

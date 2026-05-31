@@ -14,6 +14,7 @@ import botAutomation     from './modules/BotAutomation'
 import inputMutex        from './modules/InputMutex'
 import groupManager      from './modules/GroupManager'
 import friendManager     from './modules/FriendManager'
+import partyManager    from './modules/PartyManager'
 
 export function setupIPC() {
   // Создаём боксы Sandboxie для всех известных аккаунтов при старте (пока ничего не запущено).
@@ -102,6 +103,16 @@ export function setupIPC() {
   ipcMain.handle('friends:steamGuardCode', (_, accountId, code) =>
     friendManager.provideCode(accountId, code))
 
+  ipcMain.handle('groups:getEventLog', (_, accountIds) => workerManager.getEventLog(accountIds))
+
+  ipcMain.handle('groups:gatherParty', async (_, groupId) => {
+    try {
+      return await partyManager.gatherGroup(groupId)
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+  })
+
   ipcMain.handle('farm:start',    (_, id) => workerManager.start(id))
   ipcMain.handle('farm:stop', async (_, id) => {
     await workerManager.stop(id)
@@ -151,9 +162,15 @@ export function setupIPC() {
       send('queued', `В очереди (держит: ${inputMutex.currentHolder()})`)
     }
 
-    cs2Launcher.start(accountId, creds, send, { useMutex: !!useMutex }).catch(err => {
+    // Если аккаунт ещё не синхронизирован (первый запуск или смена учётных данных),
+    // запускаем Farm Start, дожидаемся получения personaName, затем переходим к CS2.
+    workerManager.ensureSynced(accountId, send).then(() => {
+      cs2Launcher.start(accountId, creds, send, { useMutex: !!useMutex }).catch(err => {
+        send('error', err.message)
+        cs2Launcher.stop(accountId)
+      })
+    }).catch(err => {
       send('error', err.message)
-      cs2Launcher.stop(accountId)
     })
 
     return { ok: true }

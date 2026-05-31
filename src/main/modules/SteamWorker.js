@@ -83,6 +83,14 @@ export class SteamWorker extends EventEmitter {
           console.log(`[SteamWorker ${this.accountId}] save steamId failed:`, e.message)
         }
       }
+      client.once('user', (sid, user) => {
+        if (sid.getSteamID64() === steamId64 && user?.player_name) {
+          try { accountManager.update(this.accountId, { personaName: user.player_name, needsSync: false }) } catch (e) {
+            console.log(`[SteamWorker ${this.accountId}] save personaName failed:`, e.message)
+          }
+          console.log(`[SteamWorker ${this.accountId}] personaName saved: ${user.player_name}`)
+        }
+      })
       this._setupClientEvents()
     } catch (err) {
       if (this._stopped) return
@@ -105,6 +113,7 @@ export class SteamWorker extends EventEmitter {
     accountManager.update(accountId, { isPrime: hasPrime })
 
     if (!hasPrime) {
+      accountManager.update(accountId, { needsSync: false })
       this._setStatus('no_prime', 'Нет Prime-статуса — аккаунт не может получать дропы')
       client.removeAllListeners()
       this.client = null

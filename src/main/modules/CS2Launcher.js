@@ -33,6 +33,7 @@ const CS2_FLAGS = [
   '+fps_max', '30',
   '+r_dynamic', '0',
   '+mat_queue_mode', '0',
+  '-condebug',
 ]
 
 class CS2Launcher extends EventEmitter {
@@ -66,7 +67,7 @@ class CS2Launcher extends EventEmitter {
       if (!cs2Path) throw new Error('CS2 не найден. Убедись что игра установлена через Steam.')
 
       const boxName = `CS2Bot_${accountId}`
-      this._active.set(accountId, { boxName, sbPath, steamPath })
+      this._active.set(accountId, { boxName, sbPath, steamPath, cs2Path })
 
       onStatus('cs2_preparing', 'Подготовка бокса Sandboxie...')
       await this._configureSandboxBox(sbPath, boxName, steamPath, cs2Path)
@@ -155,6 +156,7 @@ class CS2Launcher extends EventEmitter {
 
       // Фиксируем кол-во sandboxed cs2.exe до запуска
       const prevCs2Count = this._countBoxedProcesses('cs2')
+      const prevCs2Pids  = new Set(this._getSandboxedProcessPids('cs2'))
 
       onStatus('cs2_launching', 'Запуск CS2...')
       this._patchCS2VideoSettings(cs2Path)
@@ -170,6 +172,13 @@ class CS2Launcher extends EventEmitter {
       // Если CS2 грузится дольше обычного — не падаем в ошибку, обновляем статус
       // и продолжаем ждать пока пользователь не нажмёт «Стоп» или cs2.exe не появится.
       await this._waitForCs2WithSoftTimeout(accountId, prevCs2Count, onStatus)
+
+      // Сохраняем PID нашего cs2.exe — нужен BotAutomation для HWND-поиска,
+      // WASD-имитации и UI-кликов (PartyManager). Start.exe /list_pids не поддерживается
+      // в Classic Sandboxie, поэтому трекаем PID здесь по diff до/после запуска.
+      const cs2Pid = this._getSandboxedProcessPids('cs2').find(p => !prevCs2Pids.has(p))
+      const activeEntry = this._active.get(accountId)
+      if (activeEntry && cs2Pid) activeEntry.cs2Pid = cs2Pid
 
       // Ждём 90с чтобы CS2 загрузился до лобби
       await new Promise(r => setTimeout(r, CS2_LOBBY_WAIT_MS))
@@ -732,6 +741,18 @@ class CS2Launcher extends EventEmitter {
       )
       return parseInt(out.trim(), 10) || 0
     } catch { return 0 }
+  }
+
+  // Возвращает список PID-ов sandboxed-процессов (с SbieDll.dll).
+  _getSandboxedProcessPids(name) {
+    try {
+      const out = execSync(
+        `powershell -NoProfile -Command "Get-Process ${name} -EA SilentlyContinue | Where-Object { try { $_.Modules.ModuleName -contains 'SbieDll.dll' } catch { $false } } | Select-Object -ExpandProperty Id"`,
+        { encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim()
+      if (!out) return []
+      return out.split(/\s+/).map(Number).filter(Boolean)
+    } catch { return [] }
   }
 
   // Ждёт пока количество sandboxed-процессов превысит prevCount.

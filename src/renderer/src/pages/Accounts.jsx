@@ -30,6 +30,7 @@ const STATUS_BADGE = {
   warmup:                'badge-yellow',
   awaiting_guard:        'badge-yellow',
   queued:                'badge-yellow',
+  syncing:               'badge-green',
 }
 
 const STATUS_LABEL = {
@@ -61,11 +62,12 @@ const STATUS_LABEL = {
   warmup:                'Прогрев',
   awaiting_guard:        'Введи код',
   queued:                'В очереди',
+  syncing:               'Синхронизация',
 }
 
-const CS2_STATUSES = new Set(['farming', 'lobby', 'queued', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_preparing', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_match_loading', 'cs2_in_match', 'cs2_lobby'])
+const CS2_STATUSES = new Set(['syncing', 'farming', 'lobby', 'queued', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running', 'cs2_preparing', 'cs2_launching', 'cs2_searching', 'cs2_loading', 'cs2_match', 'cs2_match_loading', 'cs2_in_match', 'cs2_lobby'])
 
-const ACTIVE_STATUSES = new Set(['online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'queued', 'no_prime', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running'])
+const ACTIVE_STATUSES = new Set(['syncing', 'online', 'connecting', 'reconnecting', 'farming', 'awaiting_guard', 'queued', 'no_prime', 'steam_launching', 'steam_loading', 'steam_login_form', 'steam_entering_creds', 'steam_creds_submitted', 'steam_entering_guard', 'steam_logged_in', 'steam_running'])
 
 // Статусы где идёт автоматический вход в Steam (от первого старта до момента
 // когда Steam полностью залогинился). Пока хотя бы один аккаунт в этих

@@ -238,7 +238,32 @@ export default function TrackingWindow({ groupId }) {
       return
     }
     setGroup(g)
-    groupAccountIdsRef.current = new Set(g.accounts.map(a => a.id))
+    const ids = g.accounts.map(a => a.id)
+    groupAccountIdsRef.current = new Set(ids)
+
+    // Загружаем исторические события, накопленные с момента запуска группы.
+    const byId = new Map(g.accounts.map(a => [a.id, a.login]))
+    const historical = await window.api.groups.getEventLog(ids)
+    if (historical?.length) {
+      const entries = historical.map(e => {
+        const time = new Date(e.ts).toLocaleTimeString('ru-RU', { hour12: false })
+        const login = byId.get(e.accountId) || `#${e.accountId}`
+        let kind = e.type
+        let text = ''
+        if (e.type === 'status') {
+          const label = STATUS_LABEL[e.status] || e.status
+          text = e.message ? `${label} — ${e.message}` : label
+        } else if (e.type === 'error') {
+          text = e.message || 'ошибка'
+        } else if (e.type === 'drop') {
+          kind = 'drop'
+          text = `дроп: ${e.item?.name || 'предмет'}`
+        }
+        return { time, accountId: e.accountId, login, kind, text }
+      })
+      setLogEntries(entries.reverse().slice(0, MAX_LOG_ENTRIES))
+    }
+
     setLoading(false)
   }, [groupId])
 
