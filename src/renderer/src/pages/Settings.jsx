@@ -361,6 +361,31 @@ export default function Settings() {
       </div>
 
       <div className="card space-y-4">
+        <p className="text-sm font-medium text-text-primary border-b border-border pb-3">Раскладка окон CS2</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="label">Столбцов в сетке</label>
+            <input className="input" type="number" min="1" max="10"
+              placeholder="Авто"
+              value={s.window_grid_cols || ''}
+              onChange={e => set('window_grid_cols', e.target.value)} />
+            <p className="text-text-muted text-xs mt-1">Пусто = авто (√n). При запуске по умолчанию 2.</p>
+          </div>
+          <div>
+            <label className="label">Авто-раскладка при запуске</label>
+            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+              <input type="checkbox"
+                checked={s.window_grid_autoarrange !== 'false'}
+                onChange={e => set('window_grid_autoarrange', e.target.checked ? 'true' : 'false')} />
+              <span className="text-sm text-text-secondary">
+                Открывать окно CS2 сразу в своей ячейке
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div className="card space-y-4">
         <p className="text-sm font-medium text-text-primary border-b border-border pb-3 flex items-center gap-2">
           <Key size={14} /> Лицензия
         </p>
