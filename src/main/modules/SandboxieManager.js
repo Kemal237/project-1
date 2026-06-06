@@ -8,6 +8,7 @@ const INSTALL_PATHS = [
   'C:\\Program Files\\Sandboxie',
   'C:\\Program Files\\Sandboxie-Plus',
   'C:\\Program Files (x86)\\Sandboxie',
+  'D:\\sandboxie',
 ]
 
 class SandboxieManager {

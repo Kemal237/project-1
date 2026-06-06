@@ -17,6 +17,7 @@ const SANDBOXIE_PATHS = [
   'C:\\Program Files\\Sandboxie',
   'C:\\Program Files\\Sandboxie-Plus',
   'C:\\Program Files (x86)\\Sandboxie',
+  'D:\\sandboxie',
 ]
 
 const STEAM_POLL_MS      = 2000
@@ -666,6 +667,10 @@ class CS2Launcher extends EventEmitter {
       ['set',    'Enabled',                'y'],
       ['set',    'AutoRecover',            'n'],
       ['set',    'MsiInstallerExemptions', 'y'],
+      // Steam содержит большие файлы (libcef.dll ~150МБ). Без снятия лимита
+      // Sandboxie отказывается копировать их в бокс (SBIE2102). -1 = без лимита.
+      ['set',    'CopyLimitKb',            '-1'],
+      ['set',    'CopyLimitSilent',        'y'],
       ['append', 'OpenFilePath',           steamAppsPath],
       ['append', 'OpenFilePath',           csgoPath],
       ['append', 'OpenKeyPath',            'HKLM\\Software\\Valve'],
@@ -724,6 +729,8 @@ class CS2Launcher extends EventEmitter {
         'Enabled=y',
         'AutoRecover=n',
         'MsiInstallerExemptions=y',
+        'CopyLimitKb=-1',
+        'CopyLimitSilent=y',
         `OpenFilePath=${join(steamPath, 'steamapps')}`,
         `OpenFilePath=${join(cs2Path, 'game')}`,
         'OpenKeyPath=HKLM\\Software\\Valve',
